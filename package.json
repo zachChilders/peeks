@@ -13,6 +13,7 @@
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-geolocation": "^2.3.2",
     "tauri-plugin-barometer-api": "workspace:*",
+    "tauri-plugin-camera-api": "workspace:*",
     "@tauri-apps/plugin-opener": "^2",
     "leaflet": "^1.9.4",
     "react": "^19.1.0",

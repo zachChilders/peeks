@@ -13,6 +13,10 @@
     "geolocation:allow-clear-watch",
     "barometer:allow-is-available",
     "barometer:allow-start-updates",
-    "barometer:allow-stop-updates"
+    "barometer:allow-stop-updates",
+    "camera:allow-start-camera",
+    "camera:allow-stop-camera",
+    "camera:allow-start-heading-updates",
+    "camera:allow-stop-heading-updates"
   ]
 }

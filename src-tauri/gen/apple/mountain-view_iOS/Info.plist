@@ -24,6 +24,8 @@
 	<string>Mountain View uses your location to show your position and elevation on the map.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>Mountain View uses the barometer to track elevation changes more precisely.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Mountain View uses the camera for its augmented reality view of surrounding terrain.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIRequiredDeviceCapabilities</key>

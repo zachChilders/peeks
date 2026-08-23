@@ -43,7 +43,7 @@ function metersToFeet(m: number): number {
   return m * 3.28084;
 }
 
-export default function MapView() {
+export default function MapView({ onOpenCamera }: { onOpenCamera: () => void }) {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const markerRef = useRef<L.Marker | null>(null);
@@ -234,6 +234,19 @@ export default function MapView() {
             d="M12 2v4M12 18v4M2 12h4M18 12h4"
           />
           <circle cx="12" cy="12" r="7" stroke="currentColor" strokeWidth="2" fill="none" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        className="camera-button"
+        onClick={onOpenCamera}
+        aria-label="Open AR camera view"
+      >
+        <svg viewBox="0 0 24 24" width="22" height="22">
+          <path
+            fill="currentColor"
+            d="M9 3L7.17 5H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.17L15 3H9zm3 5a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11zm0 2a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z"
+          />
         </svg>
       </button>
     </div>

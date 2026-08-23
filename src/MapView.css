@@ -57,3 +57,21 @@
   cursor: default;
 }
 
+.camera-button {
+  position: absolute;
+  right: 12px;
+  bottom: calc(max(24px, env(safe-area-inset-bottom)) + 56px);
+  z-index: 1000;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  background: rgba(255, 255, 255, 0.92);
+  color: #0f0f0f;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+

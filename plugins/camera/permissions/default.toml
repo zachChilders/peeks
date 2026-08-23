@@ -1,0 +1,8 @@
+[default]
+description = "Default permissions for the plugin"
+permissions = [
+  "allow-start-camera",
+  "allow-stop-camera",
+  "allow-start-heading-updates",
+  "allow-stop-heading-updates",
+]
