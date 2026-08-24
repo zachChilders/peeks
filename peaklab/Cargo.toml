@@ -1,0 +1,25 @@
+[package]
+name = "peaklab"
+version = "0.1.0"
+edition = "2021"
+
+# Desktop harness for the AR peak-identification pipeline. Deliberately independent of
+# the Tauri app so the geometry can be iterated on against still photos.
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+tiff = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = [
+  "blocking",
+  "json",
+  "rustls-tls",
+] }
+image = "0.25"
+imageproc = "0.25"
+ab_glyph = "0.2"
+
+[profile.release]
+debug = true
