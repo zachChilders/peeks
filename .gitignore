@@ -12,6 +12,12 @@ dist
 dist-ssr
 *.local
 
+# Cargo build output for the whole workspace
+/target
+
+# Generated from the Rust command signatures by `pnpm build:bindings`
+/src/bindings.ts
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

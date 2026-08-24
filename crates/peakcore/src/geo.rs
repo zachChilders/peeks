@@ -4,6 +4,9 @@
 //! frame. Going through ECEF means Earth curvature is handled exactly rather than by
 //! bolting a correction term onto flat-earth trig.
 
+use serde::{Deserialize, Serialize};
+use specta::Type;
+
 pub const WGS84_A: f64 = 6_378_137.0;
 pub const WGS84_F: f64 = 1.0 / 298.257_223_563;
 pub const WGS84_E2: f64 = WGS84_F * (2.0 - WGS84_F);
@@ -14,7 +17,7 @@ pub const EARTH_MEAN_R: f64 = 6_371_008.8;
 /// Effective-radius coefficient for standard atmospheric refraction.
 pub const REFRACTION_K: f64 = 7.0 / 6.0;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Type)]
 pub struct Geodetic {
     /// Degrees, north positive.
     pub lat: f64,

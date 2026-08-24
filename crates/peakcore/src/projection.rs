@@ -1,8 +1,12 @@
 //! Camera pose, projection, and label layout (M4).
 
+use serde::{Deserialize, Serialize};
+use specta::Type;
+
 /// Camera orientation and intrinsics. `yaw`/`pitch`/`roll` describe where the camera is
 /// pointed in the observer's local ENU frame; `hfov` + `width` derive the focal length.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
 pub struct CameraPose {
     /// True-north azimuth, degrees, clockwise.
     pub yaw_deg: f64,
@@ -74,16 +78,14 @@ impl CameraPose {
 
     /// Project an ENU vector to pixel coordinates (origin top-left, y down).
     /// `None` if the point is behind the camera.
+    ///
+    /// Recomputes [`basis`](Self::basis) on every call, which is fine for projecting a
+    /// handful of points against a handful of camera poses (peaklab's `render`
+    /// subcommand). A caller projecting many points against one fixed pose in a tight
+    /// loop — the AR view's per-tick projection — should call [`basis`](Self::basis)
+    /// once and use [`project_with_basis`] instead.
     pub fn project(&self, target_enu: [f64; 3]) -> Option<(f64, f64)> {
-        let (f, r, u) = self.basis();
-        let z = dot(target_enu, f);
-        if z <= 0.0 {
-            return None;
-        }
-        let f_px = self.focal_px();
-        let x = self.width as f64 / 2.0 + f_px * dot(target_enu, r) / z;
-        let y = self.height as f64 / 2.0 - f_px * dot(target_enu, u) / z;
-        Some((x, y))
+        project_with_basis(target_enu, self.basis(), self.focal_px(), self.width, self.height)
     }
 
     /// Vertical FOV implied by `hfov_deg` and the image aspect ratio.
@@ -93,8 +95,33 @@ impl CameraPose {
     }
 }
 
+/// Project an ENU vector to pixel coordinates using an already-computed camera basis
+/// (from [`CameraPose::basis`]) instead of recomputing it. `None` if the point is
+/// behind the camera.
+///
+/// Projecting many peaks against one fixed pose and calling `basis()` fresh each time —
+/// as [`CameraPose::project`] does — recomputes the same yaw/pitch trig and cross
+/// products for every point. Hoisting `basis()` out of the loop and calling this
+/// instead turns that into eight trig calls total per tick rather than eight per point.
+pub fn project_with_basis(
+    target_enu: [f64; 3],
+    basis: ([f64; 3], [f64; 3], [f64; 3]),
+    focal_px: f64,
+    width: u32,
+    height: u32,
+) -> Option<(f64, f64)> {
+    let (f, r, u) = basis;
+    let z = dot(target_enu, f);
+    if z <= 0.0 {
+        return None;
+    }
+    let x = width as f64 / 2.0 + focal_px * dot(target_enu, r) / z;
+    let y = height as f64 / 2.0 - focal_px * dot(target_enu, u) / z;
+    Some((x, y))
+}
+
 /// A rectangle in pixel space, used for label-overlap testing.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 pub struct Rect {
     pub x: f64,
     pub y: f64,

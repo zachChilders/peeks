@@ -1,0 +1,18 @@
+[package]
+name = "peakcore"
+version = "0.1.0"
+edition = "2021"
+
+# Geodesy, camera projection, and Overpass query/parse — shared by peaklab (desktop) and
+# src-tauri (mobile). Deliberately dependency-light: this compiles into the iOS static
+# lib, so no reqwest/image/anyhow here, only what the math and parsing actually need.
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = "2"
+# Reflection-only (compile-time type descriptors, no runtime weight): lets the types
+# that cross the Tauri IPC boundary — Geodetic, CameraPose, Rect — derive both their
+# serde impl and their generated-TypeScript shape from the same struct definition,
+# without src-tauri needing its own hand-typed copies.
+specta = { version = "=2.0.0-rc.25", features = ["derive"] }

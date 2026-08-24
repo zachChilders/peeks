@@ -4,8 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
+    "build:plugins": "pnpm -r --filter './plugins/*' build",
+    "build:bindings": "cargo run -p mountain-view --bin generate-bindings",
+    "dev": "pnpm build:plugins && pnpm build:bindings && vite",
+    "build": "pnpm build:plugins && pnpm build:bindings && tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri"
   },
