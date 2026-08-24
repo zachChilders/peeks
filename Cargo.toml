@@ -4,7 +4,7 @@
 # lockfiles and target dirs, which is what let the geodesy drift into a hand-written
 # TypeScript copy in the first place: there was no shared crate to put it in.
 [workspace]
-members = ["peaklab", "src-tauri", "plugins/*"]
+members = ["crates/peakcore", "peaklab", "src-tauri", "plugins/*"]
 resolver = "2"
 
 [workspace.dependencies]

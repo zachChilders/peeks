@@ -7,6 +7,7 @@ edition = "2021"
 # the Tauri app so the geometry can be iterated on against still photos.
 
 [dependencies]
+peakcore = { path = "../crates/peakcore" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 tiff = "0.10"

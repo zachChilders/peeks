@@ -19,6 +19,7 @@
 //!   mode.
 
 use anyhow::{Context, Result};
+use peakcore::overpass::{self, RawPeak};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -44,20 +45,6 @@ pub struct Peak {
     pub snap_offset_m: f64,
 }
 
-#[derive(Deserialize)]
-struct OverpassResponse {
-    elements: Vec<OverpassNode>,
-}
-
-#[derive(Deserialize)]
-struct OverpassNode {
-    id: i64,
-    lat: f64,
-    lon: f64,
-    #[serde(default)]
-    tags: std::collections::HashMap<String, String>,
-}
-
 /// Fetch named peaks within `radius_m`, caching the raw Overpass response.
 ///
 /// Overpass rate-limits aggressively and this gets re-run constantly during tuning, so
@@ -77,10 +64,7 @@ pub fn fetch_raw(cache_dir: &Path, lat: f64, lon: f64, radius_m: f64) -> Result<
         return Ok(serde_json::from_str(&text)?);
     }
 
-    let query = format!(
-        "[out:json][timeout:90];\nnode[\"natural\"=\"peak\"][\"name\"](around:{:.0},{lat},{lon});\nout body;",
-        radius_m
-    );
+    let query = overpass::build_query(lat, lon, radius_m);
     eprintln!("  querying Overpass ({:.0} km radius) …", radius_m / 1000.0);
 
     // Overpass expects the query form-encoded as `data=`, and rejects requests without a
@@ -96,43 +80,11 @@ pub fn fetch_raw(cache_dir: &Path, lat: f64, lon: f64, radius_m: f64) -> Result<
         .error_for_status()
         .context("Overpass returned an error status")?;
 
-    let parsed: OverpassResponse = resp.json().context("parsing Overpass response")?;
-
-    let raw: Vec<RawPeak> = parsed
-        .elements
-        .into_iter()
-        .filter_map(|n| {
-            Some(RawPeak {
-                osm_id: n.id,
-                lat: n.lat,
-                lon: n.lon,
-                name: n.tags.get("name")?.clone(),
-                ele: n.tags.get("ele").and_then(|e| parse_ele(e)),
-            })
-        })
-        .collect();
+    let body = resp.text().context("reading Overpass response")?;
+    let raw = overpass::parse_response(&body).context("parsing Overpass response")?;
 
     std::fs::write(&cache_path, serde_json::to_string_pretty(&raw)?)?;
     Ok(raw)
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RawPeak {
-    pub osm_id: i64,
-    pub name: String,
-    pub lat: f64,
-    pub lon: f64,
-    pub ele: Option<f64>,
-}
-
-/// `ele` is free-form in practice: bare numbers, `"1234 m"`, occasionally junk.
-fn parse_ele(s: &str) -> Option<f64> {
-    let cleaned: String = s
-        .trim()
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
-        .collect();
-    cleaned.parse().ok()
 }
 
 /// Attach DEM elevations, snapping each node to the highest posting within
@@ -176,17 +128,4 @@ pub fn load(
 
 pub fn cache_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("osm")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ele_parsing() {
-        assert_eq!(parse_ele("4392"), Some(4392.0));
-        assert_eq!(parse_ele("4392.5 m"), Some(4392.5));
-        assert_eq!(parse_ele(" 1234m"), Some(1234.0));
-        assert_eq!(parse_ele("approx"), None);
-    }
 }

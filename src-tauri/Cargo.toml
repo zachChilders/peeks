@@ -18,6 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+peakcore = { path = "../crates/peakcore" }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { workspace = true }
@@ -25,5 +26,5 @@ serde_json = { workspace = true }
 tauri-plugin-geolocation = "2.3.2"
 tauri-plugin-barometer = { path = "../plugins/barometer" }
 tauri-plugin-camera = { path = "../plugins/camera" }
-reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "form", "rustls"] }
 
