@@ -10,6 +10,7 @@
 use peakcore::overpass;
 
 #[tauri::command]
+#[specta::specta]
 pub async fn fetch_peaks_overpass(lat: f64, lon: f64, radius_m: f64) -> Result<String, String> {
     let query = overpass::build_query(lat, lon, radius_m);
 
