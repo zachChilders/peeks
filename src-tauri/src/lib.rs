@@ -8,7 +8,7 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
-mod overpass;
+mod peaks;
 mod scene;
 
 /// The single source of truth for which commands exist and what they look like.
@@ -17,7 +17,8 @@ mod scene;
 fn specta_builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new().commands(collect_commands![
         greet,
-        overpass::fetch_peaks_overpass,
+        peaks::fetch_peaks,
+        peaks::get_elevation,
         scene::set_scene,
         scene::project_labels,
     ])

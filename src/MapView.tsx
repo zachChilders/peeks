@@ -17,6 +17,7 @@ import {
   stopUpdates as stopBarometerUpdates,
   type AltitudeReading,
 } from "tauri-plugin-barometer-api";
+import { fetchElevation } from "./lib/elevation";
 import "./MapView.css";
 
 L.Icon.Default.mergeOptions({
@@ -25,19 +26,7 @@ L.Icon.Default.mergeOptions({
   shadowUrl: markerShadow,
 });
 
-// SRTM/ASTER-backed elevation lookup, no API key required.
-// See https://www.open-elevation.com
 const ELEVATION_MIN_INTERVAL_MS = 15_000;
-
-async function fetchElevation(lat: number, lon: number): Promise<number> {
-  const url = `https://api.open-elevation.com/api/v1/lookup?locations=${lat},${lon}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Elevation lookup failed: ${res.status}`);
-  const body = await res.json();
-  const result = body?.results?.[0]?.elevation;
-  if (typeof result !== "number") throw new Error("Elevation lookup returned no data");
-  return result;
-}
 
 function metersToFeet(m: number): number {
   return m * 3.28084;

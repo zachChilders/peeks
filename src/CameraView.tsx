@@ -11,7 +11,7 @@ import {
   type MotionReading,
 } from "tauri-plugin-camera-api";
 import { commands, type CameraPose, type Geodetic, type PeakWithMetrics, type PlacedLabel } from "./bindings";
-import { fetchPeaks } from "./lib/peaks";
+import { fetchElevation } from "./lib/elevation";
 import "./CameraView.css";
 
 const CARDINALS = [
@@ -31,16 +31,6 @@ const PEAK_RADIUS_M = 100_000;
 const HFOV_DEG = 63;
 const PROJECTION_INTERVAL_MS = 100;
 const LABEL_FONT = "15px -apple-system, BlinkMacSystemFont, sans-serif";
-
-async function fetchGroundElevation(lat: number, lon: number): Promise<number> {
-  const url = `https://api.open-elevation.com/api/v1/lookup?locations=${lat},${lon}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Elevation lookup failed: ${res.status}`);
-  const body = await res.json();
-  const result = body?.results?.[0]?.elevation;
-  if (typeof result !== "number") throw new Error("Elevation lookup returned no data");
-  return result;
-}
 
 /** Pixel `(width, height)` of `text` in the AR label font, via an offscreen canvas —
  * canvas text measurement is a browser API with no Rust equivalent, which is why this
@@ -118,8 +108,8 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
 
   // Observer position + ground elevation, then nearby named peaks, then hand the whole
   // scene to Rust once via setScene. Fetched once — no re-fetch-on-movement threshold in
-  // this v0 pass (see lib/peaks.ts for the fuller scope-cut rationale: no local DEM on
-  // mobile yet, so no visibility filtering either).
+  // this v0 pass: no local DEM on mobile yet, so no visibility/occlusion filtering
+  // either (peaks behind a nearer ridge will still show).
   useEffect(() => {
     let cancelled = false;
 
@@ -128,10 +118,7 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
       try {
         const pos = await getCurrentPosition();
         step = "fetchGroundElevation";
-        const groundElev = await fetchGroundElevation(
-          pos.coords.latitude,
-          pos.coords.longitude,
-        );
+        const groundElev = await fetchElevation(pos.coords.latitude, pos.coords.longitude);
         if (cancelled) return;
         const observer: Geodetic = {
           lat: pos.coords.latitude,
@@ -140,11 +127,13 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
         };
 
         step = "fetchPeaks";
-        const peaks = await fetchPeaks(
+        const peaksResult = await commands.fetchPeaks(
           pos.coords.latitude,
           pos.coords.longitude,
           PEAK_RADIUS_M,
         );
+        if (peaksResult.status === "error") throw new Error(peaksResult.error);
+        const peaks = peaksResult.data;
         if (cancelled) return;
 
         // Text metrics can only come from the browser (canvas measureText has no Rust
