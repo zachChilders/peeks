@@ -25,4 +25,5 @@ serde_json = "1"
 tauri-plugin-geolocation = "2.3.2"
 tauri-plugin-barometer = { path = "../plugins/barometer" }
 tauri-plugin-camera = { path = "../plugins/camera" }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
 

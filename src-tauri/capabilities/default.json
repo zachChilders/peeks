@@ -17,6 +17,8 @@
     "camera:allow-start-camera",
     "camera:allow-stop-camera",
     "camera:allow-start-heading-updates",
-    "camera:allow-stop-heading-updates"
+    "camera:allow-stop-heading-updates",
+    "camera:allow-start-motion-updates",
+    "camera:allow-stop-motion-updates"
   ]
 }

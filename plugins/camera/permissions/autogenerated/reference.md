@@ -8,6 +8,8 @@ Default permissions for the plugin
 - `allow-stop-camera`
 - `allow-start-heading-updates`
 - `allow-stop-heading-updates`
+- `allow-start-motion-updates`
+- `allow-stop-motion-updates`
 
 ## Permission Table
 
@@ -73,6 +75,32 @@ Denies the start_heading_updates command without any pre-configured scope.
 <tr>
 <td>
 
+`camera:allow-start-motion-updates`
+
+</td>
+<td>
+
+Enables the start_motion_updates command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`camera:deny-start-motion-updates`
+
+</td>
+<td>
+
+Denies the start_motion_updates command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `camera:allow-stop-camera`
 
 </td>
@@ -118,6 +146,32 @@ Enables the stop_heading_updates command without any pre-configured scope.
 <td>
 
 Denies the stop_heading_updates command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`camera:allow-stop-motion-updates`
+
+</td>
+<td>
+
+Enables the stop_motion_updates command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`camera:deny-stop-motion-updates`
+
+</td>
+<td>
+
+Denies the stop_motion_updates command without any pre-configured scope.
 
 </td>
 </tr>

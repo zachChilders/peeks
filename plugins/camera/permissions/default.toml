@@ -5,4 +5,6 @@ permissions = [
   "allow-stop-camera",
   "allow-start-heading-updates",
   "allow-stop-heading-updates",
+  "allow-start-motion-updates",
+  "allow-stop-motion-updates",
 ]

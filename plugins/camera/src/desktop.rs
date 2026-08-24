@@ -36,4 +36,19 @@ impl<R: Runtime> Camera<R> {
     pub fn stop_heading_updates(&self) -> crate::Result<()> {
         Ok(())
     }
+
+    pub fn start_motion_updates<F: Fn(MotionEvent) + Send + Sync + 'static>(
+        &self,
+        _callback: F,
+    ) -> crate::Result<u32> {
+        Ok(0)
+    }
+
+    pub(crate) fn start_motion_updates_inner(&self, _channel: Channel) -> crate::Result<()> {
+        Ok(())
+    }
+
+    pub fn stop_motion_updates(&self) -> crate::Result<()> {
+        Ok(())
+    }
 }

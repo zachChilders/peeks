@@ -51,3 +51,38 @@ export async function startHeadingUpdates(
 export async function stopHeadingUpdates(): Promise<void> {
   await invoke('plugin:camera|stop_heading_updates')
 }
+
+export type MotionReading = {
+  /**
+   * Camera tilt above horizontal, in degrees (0 = level, +90 = pointing at zenith).
+   */
+  pitch: number
+  /**
+   * Rotation about the camera's optical axis, in degrees (0 = top of phone points up).
+   */
+  roll: number
+  timestamp: number
+}
+
+/**
+ * Start streaming device-motion (pitch/roll) updates, derived from the gravity vector
+ * for a phone held upright as a camera viewfinder.
+ */
+export async function startMotionUpdates(
+  cb: (reading: MotionReading | null, error?: string) => void
+): Promise<number> {
+  const channel = new Channel<MotionReading | string>()
+  channel.onmessage = (message) => {
+    if (typeof message === 'string') {
+      cb(null, message)
+    } else {
+      cb(message)
+    }
+  }
+  await invoke('plugin:camera|start_motion_updates', { channel })
+  return channel.id
+}
+
+export async function stopMotionUpdates(): Promise<void> {
+  await invoke('plugin:camera|stop_motion_updates')
+}

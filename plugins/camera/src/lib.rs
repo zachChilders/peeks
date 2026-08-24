@@ -39,7 +39,9 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
       commands::start_camera,
       commands::stop_camera,
       commands::start_heading_updates,
-      commands::stop_heading_updates
+      commands::stop_heading_updates,
+      commands::start_motion_updates,
+      commands::stop_motion_updates
     ])
     .setup(|app, api| {
       #[cfg(mobile)]

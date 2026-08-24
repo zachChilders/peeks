@@ -1,11 +1,16 @@
 import AVFoundation
 import CoreLocation
+import CoreMotion
 import SwiftRs
 import Tauri
 import UIKit
 import WebKit
 
 class StartHeadingArgs: Decodable {
+  let channel: Channel
+}
+
+class StartMotionArgs: Decodable {
   let channel: Channel
 }
 
@@ -17,6 +22,9 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate {
 
   private let locationManager = CLLocationManager()
   private var headingChannel: Channel?
+
+  private let motionManager = CMMotionManager()
+  private var motionChannel: Channel?
 
   override init() {
     super.init()
@@ -149,6 +157,60 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate {
     ]
 
     headingChannel?.send(reading)
+  }
+
+  //
+  // Device motion (pitch/roll, for a phone held upright as an AR viewfinder)
+  //
+
+  @objc public func startMotionUpdates(_ invoke: Invoke) throws {
+    guard motionManager.isDeviceMotionAvailable else {
+      invoke.reject("Device motion is not available on this device.")
+      return
+    }
+
+    let args = try invoke.parseArgs(StartMotionArgs.self)
+    self.motionChannel = args.channel
+
+    motionManager.deviceMotionUpdateInterval = 1.0 / 30.0
+    motionManager.startDeviceMotionUpdates(to: .main) { motion, error in
+      if let error = error {
+        do {
+          try self.motionChannel?.send(error.localizedDescription)
+        } catch {
+          Logger.error(error)
+        }
+        return
+      }
+      guard let motion = motion else { return }
+
+      // Derived directly from the gravity vector rather than `motion.attitude`, because
+      // CMAttitude's pitch/roll Euler angles are defined for a device held flat
+      // (rotation about the fixed local X/Y axes), not for a phone held upright as a
+      // camera viewfinder. Here the camera's optical axis is the device's local -Z, so:
+      //   pitch = angle of the camera axis above horizontal (0 = level, +90 = zenith)
+      //   roll  = rotation about the camera axis (0 = top of phone points up)
+      // Unverified on real hardware — Simulator has no motion sensors to check against.
+      // If pitch or roll reads inverted on a real device, flip the corresponding sign.
+      let g = motion.gravity
+      let pitch = atan2(g.z, -g.y) * 180.0 / .pi
+      let roll = atan2(g.x, -g.y) * 180.0 / .pi
+
+      let reading: JsonObject = [
+        "pitch": pitch,
+        "roll": roll,
+        "timestamp": Int(Date().timeIntervalSince1970 * 1000),
+      ]
+      self.motionChannel?.send(reading)
+    }
+
+    invoke.resolve()
+  }
+
+  @objc public func stopMotionUpdates(_ invoke: Invoke) throws {
+    motionManager.stopDeviceMotionUpdates()
+    self.motionChannel = nil
+    invoke.resolve()
   }
 }
 

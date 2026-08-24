@@ -76,9 +76,53 @@ impl<R: Runtime> Camera<R> {
             .run_mobile_plugin("stopHeadingUpdates", ())
             .map_err(Into::into)
     }
+
+    /// Start streaming device-motion (pitch/roll) updates.
+    pub fn start_motion_updates<F: Fn(MotionEvent) + Send + Sync + 'static>(
+        &self,
+        callback: F,
+    ) -> crate::Result<u32> {
+        let channel = Channel::new(move |event| {
+            let payload = match event {
+                InvokeResponseBody::Json(payload) => serde_json::from_str::<MotionEvent>(&payload)
+                    .unwrap_or_else(|error| {
+                        MotionEvent::Error(format!(
+                            "Couldn't deserialize motion event payload: `{error}`"
+                        ))
+                    }),
+                _ => MotionEvent::Error("Unexpected motion event payload.".to_string()),
+            };
+
+            callback(payload);
+
+            Ok(())
+        });
+        let id = channel.id();
+
+        self.start_motion_updates_inner(channel)?;
+
+        Ok(id)
+    }
+
+    pub(crate) fn start_motion_updates_inner(&self, channel: Channel) -> crate::Result<()> {
+        self.0
+            .run_mobile_plugin("startMotionUpdates", StartMotionPayload { channel })
+            .map_err(Into::into)
+    }
+
+    pub fn stop_motion_updates(&self) -> crate::Result<()> {
+        self.0
+            .run_mobile_plugin("stopMotionUpdates", ())
+            .map_err(Into::into)
+    }
 }
 
 #[derive(serde::Serialize)]
 struct StartHeadingPayload {
+    channel: Channel,
+}
+
+#[derive(serde::Serialize)]
+struct StartMotionPayload {
     channel: Channel,
 }
