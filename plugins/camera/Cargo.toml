@@ -10,9 +10,9 @@ links = "tauri-plugin-camera"
 
 [dependencies]
 tauri = { version = "2.11.3" }
-serde = "1.0"
+serde = { workspace = true }
 thiserror = "2"
-serde_json = "1.0.151"
+serde_json = { workspace = true }
 
 [build-dependencies]
 tauri-plugin = { version = "2.6.3", features = ["build"] }
