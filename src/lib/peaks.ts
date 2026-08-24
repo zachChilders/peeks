@@ -8,7 +8,6 @@
 // occlusion filter is the real known gap versus the desktop pipeline.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { Geodetic } from "./geo";
 
 const ELEVATION_URL = "https://api.open-elevation.com/api/v1/lookup";
 const ELEVATION_BATCH_SIZE = 100;
@@ -77,8 +76,4 @@ async function fetchElevations(points: [number, number][]): Promise<number[]> {
   }
 
   return out;
-}
-
-export function peakToGeodetic(p: Peak): Geodetic {
-  return { lat: p.lat, lon: p.lon, alt: p.elev };
 }

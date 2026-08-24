@@ -9,12 +9,18 @@ fn greet(name: &str) -> String {
 }
 
 mod overpass;
+mod scene;
 
 /// The single source of truth for which commands exist and what they look like.
 /// `run()` and the `generate-bindings` binary both build from this, so the app's
 /// `invoke_handler` and `src/bindings.ts` can never drift apart.
 fn specta_builder() -> Builder<tauri::Wry> {
-    Builder::<tauri::Wry>::new().commands(collect_commands![greet, overpass::fetch_peaks_overpass])
+    Builder::<tauri::Wry>::new().commands(collect_commands![
+        greet,
+        overpass::fetch_peaks_overpass,
+        scene::set_scene,
+        scene::project_labels,
+    ])
 }
 
 /// Writes `src/bindings.ts` from the current command signatures. Called by the
@@ -39,6 +45,7 @@ pub fn run() {
         .plugin(tauri_plugin_geolocation::init())
         .plugin(tauri_plugin_barometer::init())
         .plugin(tauri_plugin_camera::init())
+        .manage(scene::Scene::default())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);

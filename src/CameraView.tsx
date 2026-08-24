@@ -10,9 +10,8 @@ import {
   type HeadingReading,
   type MotionReading,
 } from "tauri-plugin-camera-api";
-import { enu, greatCircleDistance, type Geodetic } from "./lib/geo";
-import { project, layoutLabels, type CameraPose, type PlacedLabel } from "./lib/projection";
-import { fetchPeaks, peakToGeodetic, type Peak } from "./lib/peaks";
+import { commands, type CameraPose, type Geodetic, type PeakWithMetrics, type PlacedLabel } from "./bindings";
+import { fetchPeaks } from "./lib/peaks";
 import "./CameraView.css";
 
 const CARDINALS = [
@@ -43,6 +42,15 @@ async function fetchGroundElevation(lat: number, lon: number): Promise<number> {
   return result;
 }
 
+/** Pixel `(width, height)` of `text` in the AR label font, via an offscreen canvas —
+ * canvas text measurement is a browser API with no Rust equivalent, which is why this
+ * one piece of the layout pipeline stays in TypeScript. */
+function measureText(ctx: CanvasRenderingContext2D | null, text: string): [number, number] {
+  if (!ctx) return [text.length * 8, 18];
+  ctx.font = LABEL_FONT;
+  return [ctx.measureText(text).width, 18];
+}
+
 export default function CameraView({ onClose }: { onClose: () => void }) {
   const [heading, setHeading] = useState<HeadingReading | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -52,8 +60,7 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
   // interval reads these refs instead of re-rendering on every single event.
   const headingRef = useRef<HeadingReading | null>(null);
   const motionRef = useRef<MotionReading | null>(null);
-  const peaksRef = useRef<Peak[]>([]);
-  const observerRef = useRef<Geodetic | null>(null);
+  const sceneReadyRef = useRef(false);
   const measureCtxRef = useRef<CanvasRenderingContext2D | null>(null);
 
   // Camera preview + compass + device motion lifecycle.
@@ -109,9 +116,10 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
-  // Observer position + ground elevation, then nearby named peaks. Fetched once — no
-  // re-fetch-on-movement threshold in this v0 pass (see lib/peaks.ts for the fuller
-  // scope-cut rationale: no local DEM on mobile yet, so no visibility filtering either).
+  // Observer position + ground elevation, then nearby named peaks, then hand the whole
+  // scene to Rust once via setScene. Fetched once — no re-fetch-on-movement threshold in
+  // this v0 pass (see lib/peaks.ts for the fuller scope-cut rationale: no local DEM on
+  // mobile yet, so no visibility filtering either).
   useEffect(() => {
     let cancelled = false;
 
@@ -125,7 +133,7 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
           pos.coords.longitude,
         );
         if (cancelled) return;
-        observerRef.current = {
+        const observer: Geodetic = {
           lat: pos.coords.latitude,
           lon: pos.coords.longitude,
           alt: groundElev + EYE_HEIGHT_M,
@@ -137,7 +145,34 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
           pos.coords.longitude,
           PEAK_RADIUS_M,
         );
-        if (!cancelled) peaksRef.current = peaks;
+        if (cancelled) return;
+
+        // Text metrics can only come from the browser (canvas measureText has no Rust
+        // equivalent), so peak names are measured once, here, and shipped to Rust with
+        // the scene rather than re-measured on every 100ms tick. Must wait for the real
+        // font to be loaded first — measuring against a fallback font before
+        // -apple-system resolves would cache wrong widths for the session.
+        await document.fonts.ready;
+        if (cancelled) return;
+        if (!measureCtxRef.current) {
+          const canvas = document.createElement("canvas");
+          measureCtxRef.current = canvas.getContext("2d");
+        }
+        const ctx = measureCtxRef.current;
+        const metrics: PeakWithMetrics[] = peaks.map((p) => {
+          const [textW, textH] = measureText(ctx, p.name);
+          return {
+            osmId: p.osmId,
+            name: p.name,
+            geo: { lat: p.lat, lon: p.lon, alt: p.elev },
+            textW,
+            textH,
+          };
+        });
+
+        step = "setScene";
+        await commands.setScene(observer, metrics);
+        if (!cancelled) sceneReadyRef.current = true;
       } catch (e) {
         if (!cancelled) {
           setError(`[${step}] ${e instanceof Error ? e.message : String(e)}`);
@@ -151,13 +186,17 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
-  // Re-project + re-layout on a fixed cadence, decoupled from sensor arrival rate.
+  // Re-project + re-layout on a fixed cadence, decoupled from sensor arrival rate. Each
+  // tick is one IPC round trip to Rust's project_labels (basis + a handful of dot
+  // products per peak — see scene.rs's project_compute_cost for the compute-side
+  // measurement); `inFlight` skips a tick rather than piling up calls if one is slow.
   useEffect(() => {
+    let inFlight = false;
+
     const id = setInterval(() => {
-      const observer = observerRef.current;
-      const peaks = peaksRef.current;
+      if (inFlight || !sceneReadyRef.current) return;
       const h = headingRef.current;
-      if (!observer || peaks.length === 0 || !h) return;
+      if (!h) return;
 
       const yawDeg = h.trueHeading >= 0 ? h.trueHeading : h.magneticHeading;
       const cam: CameraPose = {
@@ -169,36 +208,19 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
         height: window.innerHeight,
       };
 
-      const margin = 80;
-      const candidates: { name: string; anchor: [number, number]; dist: number }[] = [];
-      for (const p of peaks) {
-        const v = enu(observer, peakToGeodetic(p));
-        const projected = project(cam, v);
-        if (!projected) continue;
-        const [x, y] = projected;
-        if (x < -margin || x > cam.width + margin || y < -margin || y > cam.height + margin) {
-          continue;
-        }
-        candidates.push({
-          name: p.name,
-          anchor: [x, y],
-          dist: greatCircleDistance(observer, peakToGeodetic(p)),
+      inFlight = true;
+      // TODO(measured-in-sandbox-only): scene.rs's project_compute_cost measured the
+      // Rust-side compute at ~24-162us/call, well under the plan's ~5ms fallback
+      // threshold, but that excludes IPC/JSON overhead — this environment has no
+      // display server to run the real WebView. Wrap this call in performance.now() on
+      // a device before trusting that the full round trip is still comfortably fast.
+      commands
+        .projectLabels(cam)
+        .then((labels) => setPlacedLabels(labels))
+        .catch((e) => setError(`[projectLabels] ${e instanceof Error ? e.message : String(e)}`))
+        .finally(() => {
+          inFlight = false;
         });
-      }
-      candidates.sort((a, b) => a.dist - b.dist);
-
-      if (!measureCtxRef.current) {
-        const canvas = document.createElement("canvas");
-        measureCtxRef.current = canvas.getContext("2d");
-      }
-      const ctx = measureCtxRef.current;
-      const measure = (text: string): [number, number] => {
-        if (!ctx) return [text.length * 8, 18];
-        ctx.font = LABEL_FONT;
-        return [ctx.measureText(text).width, 18];
-      };
-
-      setPlacedLabels(layoutLabels(candidates, measure));
     }, PROJECTION_INTERVAL_MS);
 
     return () => clearInterval(id);
@@ -224,26 +246,29 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
         )}
       </div>
 
+      {/* Generated bindings type every f64 field `number | null` (serde_json encodes
+          NaN/Infinity as null), which none of these ever are in practice — the `!`s
+          below just opt back into plain-number arithmetic. */}
       <div className="ar-labels">
         {placedLabels.map((label) => (
-          <div key={label.name}>
+          <div key={label.osmId}>
             <div
               className="ar-dot"
-              style={{ left: label.anchor[0], top: label.anchor[1] }}
+              style={{ left: label.anchor[0]!, top: label.anchor[1]! }}
             />
             {label.rect && (
               <>
                 <svg className="ar-leader">
                   <line
-                    x1={label.rect.x + label.rect.w / 2}
-                    y1={label.rect.y + label.rect.h}
-                    x2={label.anchor[0]}
-                    y2={label.anchor[1]}
+                    x1={label.rect.x! + label.rect.w! / 2}
+                    y1={label.rect.y! + label.rect.h!}
+                    x2={label.anchor[0]!}
+                    y2={label.anchor[1]!}
                   />
                 </svg>
                 <div
                   className="ar-label"
-                  style={{ left: label.rect.x, top: label.rect.y }}
+                  style={{ left: label.rect.x!, top: label.rect.y! }}
                 >
                   {label.name}
                 </div>
