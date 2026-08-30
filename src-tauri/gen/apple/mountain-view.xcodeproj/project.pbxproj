@@ -25,20 +25,24 @@
 		31632F57D3F361E2B99FDB4D /* mountain-view_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "mountain-view_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		31E51BC5E35D10A4F7CD943A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		33DAD2E34A16F70431E370A3 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		443128E2828E4DA7E50FD20E /* generate_bindings.rs */ = {isa = PBXFileReference; path = generate_bindings.rs; sourceTree = "<group>"; };
 		604AC979D86B5B31E55D00F6 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		60810099E6E879AD823D7690 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		61A485060FF7C4F96449FC70 /* peaks.rs */ = {isa = PBXFileReference; path = peaks.rs; sourceTree = "<group>"; };
 		6E9DBA493A54AFB98F6092D2 /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		6F370F9E23499642975E2F83 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
 		708E365DA37735F82D27B4E4 /* mountain-view_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "mountain-view_iOS.entitlements"; sourceTree = "<group>"; };
 		7757E08A3C5DB56884E4B0A7 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
 		844AD61F47E8739C75FA1BF5 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		874E837B199293AD1DE826A1 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		922BCE589D8EFF9CBFDA4DCA /* Externals */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Externals; sourceTree = SOURCE_ROOT; };
 		924FEAFF8681937E8DF65E3D /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		981BBB925F18ABD748657048 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		A88D39762C9B3CE3FF7FB675 /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
 		B97700B83303510B3BD4CB57 /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
 		D2951620F83CDB15CA49961B /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		E8BC6B3A706244B0697A95C5 /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
+		F0294D37249A7D32AC4D6AD0 /* scene.rs */ = {isa = PBXFileReference; path = scene.rs; sourceTree = "<group>"; };
 		F92CB1BED155368FB50AE983 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
@@ -66,21 +70,14 @@
 			children = (
 				7757E08A3C5DB56884E4B0A7 /* assets */,
 				31E51BC5E35D10A4F7CD943A /* Assets.xcassets */,
+				922BCE589D8EFF9CBFDA4DCA /* Externals */,
 				33DAD2E34A16F70431E370A3 /* LaunchScreen.storyboard */,
-				60E7E173AADA71D8F50B2E68 /* Externals */,
 				E820CABABA020E0B9C565347 /* mountain-view_iOS */,
 				CDEF715EDE3068DCBDEB029A /* Sources */,
 				FED9AE6CA261A356E412DB90 /* src */,
 				61AFE80CF71444C58321E2E1 /* Frameworks */,
 				877E087B1D6EDBD4EA27E3D8 /* Products */,
 			);
-			sourceTree = "<group>";
-		};
-		60E7E173AADA71D8F50B2E68 /* Externals */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = Externals;
 			sourceTree = "<group>";
 		};
 		61AFE80CF71444C58321E2E1 /* Frameworks */ = {
@@ -123,6 +120,14 @@
 			path = "mountain-view";
 			sourceTree = "<group>";
 		};
+		A10716C65E50FAA8CBAE106D /* bin */ = {
+			isa = PBXGroup;
+			children = (
+				443128E2828E4DA7E50FD20E /* generate_bindings.rs */,
+			);
+			path = bin;
+			sourceTree = "<group>";
+		};
 		CDEF715EDE3068DCBDEB029A /* Sources */ = {
 			isa = PBXGroup;
 			children = (
@@ -145,6 +150,9 @@
 			children = (
 				B97700B83303510B3BD4CB57 /* lib.rs */,
 				E8BC6B3A706244B0697A95C5 /* main.rs */,
+				61A485060FF7C4F96449FC70 /* peaks.rs */,
+				F0294D37249A7D32AC4D6AD0 /* scene.rs */,
+				A10716C65E50FAA8CBAE106D /* bin */,
 			);
 			name = src;
 			path = ../../src;
@@ -182,6 +190,10 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					F79FC314269E082E80A0EDC8 = {
+						DevelopmentTeam = ASVZDU8NDR;
+						ProvisioningStyle = Automatic;
+					};
 				};
 			};
 			buildConfigurationList = 36C976127359B60A7186B2B2 /* Build configuration list for PBXProject "mountain-view" */;
@@ -236,7 +248,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "pnpm tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:-}\" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}";
+			shellScript = "export PATH=\"$HOME/.cargo/bin:$HOME/Library/pnpm:$HOME/.nvm/versions/node/v20.18.0/bin:/opt/homebrew/bin:$PATH\"\npnpm tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:-}\" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -303,7 +315,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -325,6 +337,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "mountain-view_iOS/mountain-view_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = ASVZDU8NDR;
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -356,6 +370,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "mountain-view_iOS/mountain-view_iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = ASVZDU8NDR;
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -422,7 +438,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";

@@ -5,6 +5,7 @@
 //! helper that `MapView.tsx` and `CameraView.tsx` each duplicated verbatim for their own
 //! single-point lookups — both now call the same [`get_elevation`] command.
 
+use peakcore::geo::{self, Geodetic};
 use peakcore::overpass;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -13,6 +14,12 @@ use specta_typescript::Number;
 const OVERPASS_URL: &str = "https://overpass-api.de/api/interpreter";
 const ELEVATION_URL: &str = "https://api.open-elevation.com/api/v1/lookup";
 const ELEVATION_BATCH_SIZE: usize = 100;
+
+/// Fractional distances (observer to peak) sampled for the terrain horizon check.
+/// Front-loaded: a given height of intervening terrain blocks a larger angle the closer
+/// it is to the observer, so nearby terrain needs finer sampling than far terrain.
+const OCCLUSION_SAMPLE_FRACS: &[f64] =
+    &[0.02, 0.05, 0.10, 0.18, 0.28, 0.40, 0.53, 0.66, 0.78, 0.88, 0.95];
 
 /// Mirrors peaklab's own client timeout. The previous mobile client
 /// (src-tauri/src/overpass.rs, now folded into this module) set none at all, which
@@ -160,6 +167,48 @@ async fn get_elevation_impl(lat: f64, lon: f64) -> Result<f64> {
     Ok(elevations[0])
 }
 
+/// Drops peaks whose line of sight from `observer` is blocked by intervening terrain.
+///
+/// For each peak, samples ground elevation at [`OCCLUSION_SAMPLE_FRACS`] points along
+/// the path to it and compares each sample's apparent elevation angle (via
+/// [`geo::look_angles`], which already folds in Earth curvature and refraction) against
+/// the peak's own. A sample that appears higher than the peak sits in front of it and
+/// blocks the view. All samples for all peaks are batched into one set of
+/// [`fetch_elevations`] calls rather than one round trip per peak.
+async fn filter_visible_peaks_impl(observer: Geodetic, peaks: Vec<Peak>) -> Result<Vec<Peak>> {
+    let client = http_client()?;
+    let n = OCCLUSION_SAMPLE_FRACS.len();
+
+    let sample_points: Vec<(f64, f64)> = peaks
+        .iter()
+        .flat_map(|peak| {
+            let peak_geo = Geodetic::new(peak.lat, peak.lon, peak.elev);
+            OCCLUSION_SAMPLE_FRACS
+                .iter()
+                .map(move |&frac| geo::great_circle_point(observer, peak_geo, frac))
+        })
+        .collect();
+
+    let elevations = fetch_elevations(&client, &sample_points).await?;
+
+    Ok(peaks
+        .into_iter()
+        .enumerate()
+        .filter(|(i, peak)| {
+            let peak_geo = Geodetic::new(peak.lat, peak.lon, peak.elev);
+            let (_, peak_elev, _) = geo::look_angles(observer, peak_geo);
+            let start = i * n;
+            !sample_points[start..start + n]
+                .iter()
+                .zip(&elevations[start..start + n])
+                .any(|(&(lat, lon), &elev)| {
+                    geo::look_angles(observer, Geodetic::new(lat, lon, elev)).1 > peak_elev
+                })
+        })
+        .map(|(_, peak)| peak)
+        .collect())
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn fetch_peaks(lat: f64, lon: f64, radius_m: f64) -> std::result::Result<Vec<Peak>, String> {
@@ -170,4 +219,13 @@ pub async fn fetch_peaks(lat: f64, lon: f64, radius_m: f64) -> std::result::Resu
 #[specta::specta]
 pub async fn get_elevation(lat: f64, lon: f64) -> std::result::Result<f64, String> {
     get_elevation_impl(lat, lon).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn filter_visible_peaks(
+    observer: Geodetic,
+    peaks: Vec<Peak>,
+) -> std::result::Result<Vec<Peak>, String> {
+    filter_visible_peaks_impl(observer, peaks).await.map_err(|e| e.to_string())
 }

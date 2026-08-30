@@ -106,10 +106,10 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
-  // Observer position + ground elevation, then nearby named peaks, then hand the whole
+  // Observer position + ground elevation, then nearby named peaks filtered down to the
+  // ones actually visible (terrain occlusion, via filterVisiblePeaks), then hand the
   // scene to Rust once via setScene. Fetched once — no re-fetch-on-movement threshold in
-  // this v0 pass: no local DEM on mobile yet, so no visibility/occlusion filtering
-  // either (peaks behind a nearer ridge will still show).
+  // this v0 pass.
   useEffect(() => {
     let cancelled = false;
 
@@ -133,7 +133,12 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
           PEAK_RADIUS_M,
         );
         if (peaksResult.status === "error") throw new Error(peaksResult.error);
-        const peaks = peaksResult.data;
+        if (cancelled) return;
+
+        step = "filterVisiblePeaks";
+        const visibleResult = await commands.filterVisiblePeaks(observer, peaksResult.data);
+        if (visibleResult.status === "error") throw new Error(visibleResult.error);
+        const peaks = visibleResult.data;
         if (cancelled) return;
 
         // Text metrics can only come from the browser (canvas measureText has no Rust

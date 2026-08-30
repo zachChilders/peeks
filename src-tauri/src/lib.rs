@@ -19,6 +19,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
         greet,
         peaks::fetch_peaks,
         peaks::get_elevation,
+        peaks::filter_visible_peaks,
         scene::set_scene,
         scene::project_labels,
     ])
