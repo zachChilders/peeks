@@ -88,6 +88,33 @@ pub fn check(
     Visibility::Visible
 }
 
+/// Highest apparent terrain elevation angle within `max_range_m` along the ray at
+/// `azimuth_deg` from `observer`, sampled every `step_m`. `None` if no sample along the
+/// ray had DEM coverage.
+///
+/// This sweeps *outward along one bearing* with no endpoint, unlike [`check`]/[`profile`]
+/// which walk *between two known points*. Exposed for a debug "drawn skyline" overlay —
+/// not used by `check` itself, which only needs "is X blocked," not the whole horizon.
+pub fn horizon_at_azimuth(
+    dem: &Dem,
+    observer: Geodetic,
+    azimuth_deg: f64,
+    max_range_m: f64,
+    step_m: f64,
+) -> Option<f64> {
+    let mut best: Option<f64> = None;
+    let mut d = step_m;
+    while d < max_range_m {
+        let (lat, lon) = geo::destination_point(observer, azimuth_deg, d);
+        if let Some(elev) = dem.elevation_at(lat, lon) {
+            let angle = apparent_elevation_deg(observer, Geodetic::new(lat, lon, elev));
+            best = Some(best.map_or(angle, |b: f64| b.max(angle)));
+        }
+        d += step_m;
+    }
+    best
+}
+
 /// The horizon profile along a path: apparent elevation angle at each sampled distance.
 /// Exposed for plotting/debugging — not used by [`check`] itself, which short-circuits.
 pub fn profile(
@@ -151,6 +178,36 @@ mod tests {
             visible.is_visible(),
             "expected visibility with the ridge removed, got {visible:?}"
         );
+    }
+
+    /// Sweeping a single azimuth is just [`check`]'s ray walk without a target to stop
+    /// at, so this only needs to confirm it finds the same ridge and ignores it in a
+    /// direction that has none.
+    #[test]
+    fn horizon_at_azimuth_finds_the_ridge_due_north_only() {
+        const BASE_LAT: f64 = 46.05;
+        let dem_with_ridge = synthetic_dem(|lat, _lon| {
+            let d_m = (lat - BASE_LAT) * 111_320.0;
+            if (1_800.0..2_300.0).contains(&d_m) {
+                200.0
+            } else {
+                0.0
+            }
+        });
+        let observer = Geodetic::new(BASE_LAT, -121.5, 2.0);
+
+        // Due north (azimuth 0): should see the ridge's elevation angle, roughly
+        // atan(200m / 2000m) ~= 5.7 degrees.
+        let north = horizon_at_azimuth(&dem_with_ridge, observer, 0.0, 5_000.0, 60.0)
+            .expect("expected DEM coverage due north");
+        assert!((north - 5.7).abs() < 1.0, "got {north}");
+
+        // Due east (azimuth 90): flat in this synthetic DEM (it only varies with
+        // latitude), so the horizon should sit at/below the geometric horizontal, not
+        // up at the ridge's angle.
+        let east = horizon_at_azimuth(&dem_with_ridge, observer, 90.0, 5_000.0, 60.0)
+            .expect("expected DEM coverage due east");
+        assert!(east < 1.0, "expected a flat horizon, got {east}");
     }
 
     /// Build a [`Dem`] backed by a single in-memory tile (N46/W122) so tests don't touch

@@ -7,6 +7,7 @@ import {
   stopHeadingUpdates,
   startMotionUpdates,
   stopMotionUpdates,
+  capturePhoto,
   type HeadingReading,
   type MotionReading,
 } from "tauri-plugin-camera-api";
@@ -23,12 +24,36 @@ function cardinal(deg: number): string {
   return CARDINALS[Math.round(deg / 22.5) % 16];
 }
 
+/** Splits the horizon's screen points into separate polyline segments wherever two
+ * consecutive points (sorted by azimuth, not screen position) land far apart on screen —
+ * e.g. the 358°→0° wraparound, or a gap where a ray had no DEM coverage — so those don't
+ * draw as a stray line sweeping across the frame. */
+function splitHorizonSegments(points: [number, number][], maxGapPx: number): [number, number][][] {
+  const segments: [number, number][][] = [];
+  let current: [number, number][] = [];
+  for (const point of points) {
+    const prev = current[current.length - 1];
+    if (prev && Math.hypot(point[0] - prev[0], point[1] - prev[1]) > maxGapPx) {
+      segments.push(current);
+      current = [];
+    }
+    current.push(point);
+  }
+  if (current.length > 0) segments.push(current);
+  return segments;
+}
+
 const EYE_HEIGHT_M = 1.6;
 // Loaded first, so the overlay shows something before the full-radius fetch below
 // (which is far more expensive: both Overpass and the occlusion sampling in
 // filterVisiblePeaks scale with the number of peaks in range) finishes.
 const NEAR_RADIUS_M = 20_000;
 const PEAK_RADIUS_M = 100_000;
+// How far out the debug DEM-horizon skyline is swept. Deliberately smaller than
+// PEAK_RADIUS_M: it's a visual sanity check against the nearby terrain in frame, not a
+// claim about the full peak-fetch radius, and a smaller sweep is cheaper.
+const HORIZON_RANGE_M = 30_000;
+const DEBUG_LOG_LINES = 12;
 // iPhone wide-camera horizontal FOV is roughly this, but not read from real device
 // intrinsics — a rough starting guess in the same spirit as peaklab's manual yaw tuning.
 // Expect to calibrate against a real photo/device the same way.
@@ -49,6 +74,10 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
   const [heading, setHeading] = useState<HeadingReading | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [placedLabels, setPlacedLabels] = useState<PlacedLabel[]>([]);
+  const [horizonPoints, setHorizonPoints] = useState<[number, number][]>([]);
+  const [debugLog, setDebugLog] = useState<string[]>([]);
+  const [capturing, setCapturing] = useState(false);
+  const [captureFlash, setCaptureFlash] = useState(false);
 
   // Sensor readings arrive far faster than we want to re-layout labels; a periodic
   // interval reads these refs instead of re-rendering on every single event.
@@ -56,6 +85,32 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
   const motionRef = useRef<MotionReading | null>(null);
   const sceneReadyRef = useRef(false);
   const measureCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+
+  // Visible on-device pipeline trace: TestFlight builds have no attached debugger, so
+  // this is how "why are there no labels" gets diagnosed from a screenshot alone.
+  function log(msg: string) {
+    console.log(msg);
+    setDebugLog((prev) => [...prev.slice(-(DEBUG_LOG_LINES - 1)), msg]);
+  }
+
+  async function onCapture() {
+    if (capturing) return;
+    setCapturing(true);
+    try {
+      await capturePhoto();
+      log("capture: saved to Photos");
+      // Brief shutter flash — the only feedback a capture happened, since there's no
+      // shutter sound/animation from the native side.
+      setCaptureFlash(true);
+      setTimeout(() => setCaptureFlash(false), 150);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      log(`ERROR [capturePhoto]: ${msg}`);
+      setError(`[capturePhoto] ${msg}`);
+    } finally {
+      setCapturing(false);
+    }
+  }
 
   // Camera preview + compass + device motion lifecycle.
   useEffect(() => {
@@ -120,15 +175,17 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     let cancelled = false;
 
-    async function loadRadius(observer: Geodetic, radiusM: number) {
+    async function loadRadius(observer: Geodetic, radiusM: number, label: string) {
       const peaksResult = await commands.fetchPeaks(observer.lat, observer.lon, radiusM);
       if (peaksResult.status === "error") throw new Error(peaksResult.error);
       if (cancelled) return;
+      log(`${label}: fetched ${peaksResult.data.length} named peaks (radius ${radiusM / 1000}km)`);
 
       const visibleResult = await commands.filterVisiblePeaks(observer, peaksResult.data, radiusM);
       if (visibleResult.status === "error") throw new Error(visibleResult.error);
       const peaks = visibleResult.data;
       if (cancelled) return;
+      log(`${label}: ${peaks.length}/${peaksResult.data.length} visible after occlusion filter`);
 
       // Text metrics can only come from the browser (canvas measureText has no Rust
       // equivalent), so peak names are measured once, here, and shipped to Rust with
@@ -155,15 +212,27 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
 
       await commands.setScene(observer, metrics);
       if (!cancelled) sceneReadyRef.current = true;
+      log(`${label}: scene set (${peaks.length} peaks)`);
+    }
+
+    async function loadHorizon(observer: Geodetic) {
+      const result = await commands.computeHorizon(observer, HORIZON_RANGE_M);
+      if (result.status === "error") throw new Error(result.error);
+      if (cancelled) return;
+      log(`horizon: ${result.data.length} points computed (range ${HORIZON_RANGE_M / 1000}km)`);
+
+      await commands.setHorizon(result.data);
     }
 
     async function start() {
       let step = "getCurrentPosition";
       try {
         const pos = await getCurrentPosition();
+        log(`position: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`);
         step = "fetchGroundElevation";
         const groundElev = await fetchElevation(pos.coords.latitude, pos.coords.longitude);
         if (cancelled) return;
+        log(`ground elevation: ${groundElev.toFixed(0)}m`);
         const observer: Geodetic = {
           lat: pos.coords.latitude,
           lon: pos.coords.longitude,
@@ -171,13 +240,18 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
         };
 
         step = "loadNearPeaks";
-        await loadRadius(observer, NEAR_RADIUS_M);
+        await loadRadius(observer, NEAR_RADIUS_M, "near");
+
+        step = "loadHorizon";
+        await loadHorizon(observer);
 
         step = "loadFarPeaks";
-        await loadRadius(observer, PEAK_RADIUS_M);
+        await loadRadius(observer, PEAK_RADIUS_M, "far");
       } catch (e) {
         if (!cancelled) {
-          setError(`[${step}] ${e instanceof Error ? e.message : String(e)}`);
+          const msg = e instanceof Error ? e.message : String(e);
+          log(`ERROR [${step}]: ${msg}`);
+          setError(`[${step}] ${msg}`);
         }
       }
     }
@@ -218,7 +292,10 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
       // a device before trusting that the full round trip is still comfortably fast.
       commands
         .projectLabels(cam)
-        .then((labels) => setPlacedLabels(labels))
+        .then(({ labels, horizon }) => {
+          setPlacedLabels(labels);
+          setHorizonPoints(horizon.map(([x, y]) => [x ?? 0, y ?? 0]));
+        })
         .catch((e) => setError(`[projectLabels] ${e instanceof Error ? e.message : String(e)}`))
         .finally(() => {
           inFlight = false;
@@ -235,6 +312,8 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
       : heading.magneticHeading
     : null;
 
+  const horizonSegments = splitHorizonSegments(horizonPoints, Math.max(window.innerWidth, window.innerHeight));
+
   return (
     <div className="camera-view">
       <div className="camera-overlay">
@@ -247,6 +326,16 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
           !error && <div className="camera-heading">Orienting&hellip;</div>
         )}
       </div>
+
+      {/* Debug DEM-horizon skyline: the terrain angle the occlusion check computed in
+          every direction, projected through the same camera pose as the peak dots. A
+          peak dot sitting below this line is a peak the occlusion filter should already
+          be dropping; one above it that's still missing points at a different bug. */}
+      <svg className="ar-horizon">
+        {horizonSegments.map((segment, i) => (
+          <polyline key={i} points={segment.map(([x, y]) => `${x},${y}`).join(" ")} />
+        ))}
+      </svg>
 
       {/* Generated bindings type every f64 field `number | null` (serde_json encodes
           NaN/Infinity as null), which none of these ever are in practice — the `!`s
@@ -280,6 +369,8 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
         ))}
       </div>
 
+      <div className="camera-debug-log">{debugLog.join("\n")}</div>
+
       <button
         type="button"
         className="camera-close-button"
@@ -295,6 +386,18 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
           />
         </svg>
       </button>
+
+      <button
+        type="button"
+        className="camera-capture-button"
+        onClick={onCapture}
+        disabled={capturing}
+        aria-label="Capture photo"
+      >
+        <span className="camera-capture-button-inner" />
+      </button>
+
+      {captureFlash && <div className="camera-capture-flash" />}
     </div>
   );
 }

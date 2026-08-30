@@ -22,6 +22,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		1EEFEB83B8B2E0CAB4D54A0A /* dem.rs */ = {isa = PBXFileReference; path = dem.rs; sourceTree = "<group>"; };
 		31632F57D3F361E2B99FDB4D /* mountain-view_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "mountain-view_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		31E51BC5E35D10A4F7CD943A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		33DAD2E34A16F70431E370A3 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
@@ -148,6 +149,7 @@
 		FED9AE6CA261A356E412DB90 /* src */ = {
 			isa = PBXGroup;
 			children = (
+				1EEFEB83B8B2E0CAB4D54A0A /* dem.rs */,
 				B97700B83303510B3BD4CB57 /* lib.rs */,
 				E8BC6B3A706244B0697A95C5 /* main.rs */,
 				61A485060FF7C4F96449FC70 /* peaks.rs */,

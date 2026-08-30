@@ -45,6 +45,7 @@ targets:
         NSCameraUsageDescription: Mountain View uses the camera to show a live AR overlay of surrounding peaks over the real-world view.
         NSLocationWhenInUseUsageDescription: Mountain View uses your location to identify and position nearby peaks in the AR overlay.
         NSMotionUsageDescription: Mountain View uses motion and barometer data to track device orientation and elevation for the AR overlay.
+        NSPhotoLibraryAddUsageDescription: Mountain View saves the photos you capture in the AR view to your Photos library.
         ITSAppUsesNonExemptEncryption: false
         UILaunchStoryboardName: LaunchScreen
         UIRequiredDeviceCapabilities: [arm64, metal]

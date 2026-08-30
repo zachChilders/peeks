@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreLocation
 import CoreMotion
+import Photos
 import SwiftRs
 import Tauri
 import UIKit
@@ -14,11 +15,16 @@ class StartMotionArgs: Decodable {
   let channel: Channel
 }
 
-class CameraPlugin: Plugin, CLLocationManagerDelegate {
+class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDelegate {
   private weak var webview: WKWebView?
   private let captureSession = AVCaptureSession()
+  private let photoOutput = AVCapturePhotoOutput()
   private var previewLayer: AVCaptureVideoPreviewLayer?
   private var isCameraRunning = false
+  private var currentDevice: AVCaptureDevice?
+  private weak var pinchGesture: UIPinchGestureRecognizer?
+  private var pinchStartZoomFactor: CGFloat?
+  private var pendingCaptureInvoke: Invoke?
 
   private let locationManager = CLLocationManager()
   private var headingChannel: Channel?
@@ -57,19 +63,22 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate {
           return
         }
         guard
-          let device = AVCaptureDevice.default(
-            .builtInWideAngleCamera, for: .video, position: .back),
+          let device = self.backCameraDevice(),
           let input = try? AVCaptureDeviceInput(device: device)
         else {
           invoke.reject("No back camera available on this device.")
           return
         }
+        self.currentDevice = device
 
         if self.captureSession.inputs.isEmpty {
           self.captureSession.beginConfiguration()
           self.captureSession.sessionPreset = .high
           if self.captureSession.canAddInput(input) {
             self.captureSession.addInput(input)
+          }
+          if self.captureSession.canAddOutput(self.photoOutput) {
+            self.captureSession.addOutput(self.photoOutput)
           }
           self.captureSession.commitConfiguration()
         }
@@ -79,12 +88,22 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate {
         webview.backgroundColor = .clear
         webview.scrollView.backgroundColor = .clear
         webview.scrollView.isOpaque = false
+        // The AR overlay has nothing worth pinch-zooming as a web page; freeing this up
+        // lets our own pinch recognizer (added below) drive camera zoom instead of
+        // WKWebView's built-in page-content zoom fighting it for the same gesture.
+        webview.scrollView.pinchGestureRecognizer?.isEnabled = false
 
         let layer = AVCaptureVideoPreviewLayer(session: self.captureSession)
         layer.videoGravity = .resizeAspectFill
         layer.frame = container.bounds
         container.layer.insertSublayer(layer, below: webview.layer)
         self.previewLayer = layer
+
+        if self.pinchGesture == nil {
+          let pinch = UIPinchGestureRecognizer(target: self, action: #selector(self.handlePinch(_:)))
+          container.addGestureRecognizer(pinch)
+          self.pinchGesture = pinch
+        }
 
         DispatchQueue.global(qos: .userInitiated).async {
           self.captureSession.startRunning()
@@ -111,9 +130,17 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate {
     previewLayer?.removeFromSuperlayer()
     previewLayer = nil
 
+    if let pinch = pinchGesture {
+      pinch.view?.removeGestureRecognizer(pinch)
+    }
+    pinchGesture = nil
+    pinchStartZoomFactor = nil
+    currentDevice = nil
+
     webview?.isOpaque = true
     webview?.backgroundColor = nil
     webview?.scrollView.backgroundColor = nil
+    webview?.scrollView.pinchGestureRecognizer?.isEnabled = true
 
     isCameraRunning = false
   }
@@ -122,6 +149,172 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate {
     guard let container = webview?.superview else { return }
     DispatchQueue.main.async {
       self.previewLayer?.frame = container.bounds
+    }
+  }
+
+  /// Prefers a virtual multi-lens device (wide + ultrawide/tele) so `videoZoomFactor`
+  /// transitions optically between real lenses instead of only digitally cropping a
+  /// single wide sensor. Falls back to the plain wide camera on devices/simulators that
+  /// don't have one — zoom still works there, just as a digital crop with a smaller
+  /// useful range.
+  private func backCameraDevice() -> AVCaptureDevice? {
+    let preferredTypes: [AVCaptureDevice.DeviceType] = [
+      .builtInTripleCamera,
+      .builtInDualCamera,
+      .builtInDualWideCamera,
+      .builtInWideAngleCamera,
+    ]
+    for type in preferredTypes {
+      if let device = AVCaptureDevice.default(type, for: .video, position: .back) {
+        return device
+      }
+    }
+    return nil
+  }
+
+  //
+  // Zoom (pinch gesture)
+  //
+
+  @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
+    guard let device = currentDevice else { return }
+
+    switch gesture.state {
+    case .began:
+      pinchStartZoomFactor = device.videoZoomFactor
+    case .changed:
+      guard let startZoom = pinchStartZoomFactor else { return }
+      let minZoom = device.minAvailableVideoZoomFactor
+      // Uncapped maxAvailableVideoZoomFactor can be absurd (100x+) on devices that allow
+      // arbitrary digital cropping past the point of being useful.
+      let maxZoom = min(device.maxAvailableVideoZoomFactor, 10.0)
+      let target = max(minZoom, min(maxZoom, startZoom * gesture.scale))
+
+      do {
+        try device.lockForConfiguration()
+        device.videoZoomFactor = target
+        device.unlockForConfiguration()
+      } catch {
+        Logger.error("Failed to set camera zoom: \(error)")
+      }
+    default:
+      break
+    }
+  }
+
+  //
+  // Photo capture
+  //
+
+  /// Captures a real photo via `AVCapturePhotoOutput` and composites the transparent
+  /// WKWebView's AR overlay on top of it, saving the result to the Photos library.
+  ///
+  /// Earlier versions of this tried to snapshot the on-screen `AVCaptureVideoPreviewLayer`
+  /// directly (first via `drawHierarchy`, which only walks the real view hierarchy and
+  /// can't see a layer manually inserted outside of it; then via `CALayer.render(in:)`,
+  /// which for most layers works fine but not for `AVCaptureVideoPreviewLayer`
+  /// specifically — its live video content is composited straight to the display via an
+  /// IOSurface-backed path that bypasses Core Animation's software render entirely, so
+  /// `render(in:)` on it comes back blank). An actual photo capture is the only reliable
+  /// way to get real pixels out of the session; the delegate callback below does the
+  /// compositing once that photo comes back.
+  @objc public func capturePhoto(_ invoke: Invoke) throws {
+    guard webview?.superview != nil else {
+      invoke.reject("Camera view is not attached to a window yet.")
+      return
+    }
+    guard isCameraRunning else {
+      invoke.reject("Camera is not running.")
+      return
+    }
+
+    if let connection = photoOutput.connection(with: .video), connection.isVideoOrientationSupported {
+      // The app's AR viewfinder is used held upright; matches the assumption already
+      // made for pitch/roll in startMotionUpdates.
+      connection.videoOrientation = .portrait
+    }
+
+    pendingCaptureInvoke = invoke
+    photoOutput.capturePhoto(with: AVCapturePhotoSettings(), delegate: self)
+  }
+
+  /// The destination rect to draw `imageSize` into `boundsSize` with aspect-fill
+  /// framing (matching the live preview's `videoGravity = .resizeAspectFill`): scaled up
+  /// so it covers the full bounds, centred, with the overflow left for the caller's
+  /// graphics context to clip — simpler and safer than manually cropping the source
+  /// image's pixel buffer, which is easy to get subtly wrong around orientation.
+  private func aspectFillRect(imageSize: CGSize, in boundsSize: CGSize) -> CGRect {
+    guard imageSize.width > 0, imageSize.height > 0 else {
+      return CGRect(origin: .zero, size: boundsSize)
+    }
+    let imageAspect = imageSize.width / imageSize.height
+    let boundsAspect = boundsSize.width / boundsSize.height
+
+    var drawSize = boundsSize
+    if imageAspect > boundsAspect {
+      drawSize.width = boundsSize.height * imageAspect
+    } else {
+      drawSize.height = boundsSize.width / imageAspect
+    }
+    let origin = CGPoint(x: (boundsSize.width - drawSize.width) / 2, y: (boundsSize.height - drawSize.height) / 2)
+    return CGRect(origin: origin, size: drawSize)
+  }
+
+  func photoOutput(
+    _ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?
+  ) {
+    guard let invoke = pendingCaptureInvoke else { return }
+    pendingCaptureInvoke = nil
+
+    if let error = error {
+      invoke.reject("Photo capture failed: \(error.localizedDescription)")
+      return
+    }
+    guard
+      let data = photo.fileDataRepresentation(),
+      let cameraImage = UIImage(data: data)
+    else {
+      invoke.reject("Failed to process captured photo.")
+      return
+    }
+
+    DispatchQueue.main.async {
+      guard let webview = self.webview, let container = webview.superview else {
+        invoke.reject("Camera view is not attached to a window yet.")
+        return
+      }
+
+      let renderer = UIGraphicsImageRenderer(bounds: container.bounds)
+      let composited = renderer.image { _ in
+        let fillRect = self.aspectFillRect(imageSize: cameraImage.size, in: container.bounds.size)
+        cameraImage.draw(in: fillRect)
+        webview.drawHierarchy(in: webview.bounds, afterScreenUpdates: true)
+      }
+
+      guard let jpegData = composited.jpegData(compressionQuality: 0.92) else {
+        invoke.reject("Failed to encode captured photo.")
+        return
+      }
+
+      PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+        guard status == .authorized || status == .limited else {
+          invoke.reject("Photo library access denied.")
+          return
+        }
+
+        PHPhotoLibrary.shared().performChanges({
+          let request = PHAssetCreationRequest.forAsset()
+          request.addResource(with: .photo, data: jpegData, options: nil)
+        }) { success, error in
+          DispatchQueue.main.async {
+            if success {
+              invoke.resolve()
+            } else {
+              invoke.reject(error?.localizedDescription ?? "Failed to save photo.")
+            }
+          }
+        }
+      }
     }
   }
 

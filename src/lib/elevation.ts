@@ -1,4 +1,5 @@
-// Ground elevation, via the get_elevation Tauri command (Open-Elevation, SRTM-backed).
+// Ground elevation, via the get_elevation Tauri command (local Copernicus GLO-30 DEM,
+// the same one the AR view's terrain-occlusion check samples).
 //
 // Both MapView and CameraView need a single-point elevation lookup; this used to be a
 // verbatim-duplicated fetch() in each file. Both now call the same Rust command.

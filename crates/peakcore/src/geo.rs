@@ -139,6 +139,38 @@ pub fn great_circle_point(a: Geodetic, b: Geodetic, frac: f64) -> (f64, f64) {
     )
 }
 
+/// Point at `distance_m` along `azimuth_deg` (true north, clockwise) from `origin`, as
+/// `(lat, lon)` degrees. The inverse-direction counterpart of [`great_circle_point`]:
+/// that walks between two known endpoints, this walks outward along a bearing with no
+/// endpoint — used to sweep a horizon profile across azimuths rather than along one
+/// specific path to a target. Same spherical-approximation trade-off.
+pub fn destination_point(origin: Geodetic, azimuth_deg: f64, distance_m: f64) -> (f64, f64) {
+    let ang_dist = distance_m / EARTH_MEAN_R;
+    let brng = azimuth_deg.to_radians();
+    let lat1 = origin.lat.to_radians();
+    let lon1 = origin.lon.to_radians();
+
+    let lat2 = (lat1.sin() * ang_dist.cos() + lat1.cos() * ang_dist.sin() * brng.cos()).asin();
+    let lon2 =
+        lon1 + (brng.sin() * ang_dist.sin() * lat1.cos()).atan2(ang_dist.cos() - lat1.sin() * lat2.sin());
+
+    (lat2.to_degrees(), lon2.to_degrees())
+}
+
+/// ENU vector matching the given azimuth/elevation angles at `range_m` from the
+/// observer. The inverse of [`azimuth_deg`]/[`elevation_deg`] taken together: those turn
+/// a vector into angles, this turns angles back into a vector — for projecting a horizon
+/// line (which only has an angle, not a real target point; see
+/// `crate::visibility::horizon_at_azimuth`) through the same camera-projection path peak
+/// dots use. `range_m` only sets the vector's scale, not its direction, so any positive
+/// value projects identically through a pinhole camera model.
+pub fn enu_from_look_angles(azimuth_deg: f64, elevation_deg: f64, range_m: f64) -> [f64; 3] {
+    let az = azimuth_deg.to_radians();
+    let el = elevation_deg.to_radians();
+    let horiz = range_m * el.cos();
+    [horiz * az.sin(), horiz * az.cos(), range_m * el.sin()]
+}
+
 /// Smallest signed difference `a - b` between two azimuths, in `(-180, 180]`.
 pub fn angle_diff_deg(a: f64, b: f64) -> f64 {
     let mut d = (a - b) % 360.0;
@@ -197,6 +229,35 @@ mod tests {
         let (lat, lon) = great_circle_point(a, b, 0.5);
         assert!((lat - 46.5).abs() < 1e-6, "lat {lat}");
         assert!((lon + 121.0).abs() < 1e-6, "lon {lon}");
+    }
+
+    #[test]
+    fn destination_point_matches_due_north_offset() {
+        let o = Geodetic::new(46.0, -121.0, 0.0);
+        let (lat, lon) = destination_point(o, 0.0, 10_000.0);
+        // Due north: longitude unchanged, latitude advances by distance/EARTH_MEAN_R.
+        assert!((lon + 121.0).abs() < 1e-6, "lon {lon}");
+        assert!(
+            (lat - (46.0 + (10_000.0 / EARTH_MEAN_R).to_degrees())).abs() < 1e-6,
+            "lat {lat}"
+        );
+    }
+
+    #[test]
+    fn enu_from_look_angles_round_trips_through_azimuth_and_elevation() {
+        for (az, el) in [(0.0, 0.0), (37.0, 12.0), (180.0, -5.0), (270.0, 45.0)] {
+            let v = enu_from_look_angles(az, el, 1_000.0);
+            assert!((angle_diff_deg(azimuth_deg(v), az)).abs() < 1e-9, "az {az} -> {v:?}");
+            assert!((elevation_deg(v) - el).abs() < 1e-9, "el {el} -> {v:?}");
+        }
+    }
+
+    #[test]
+    fn destination_point_round_trips_with_great_circle_distance() {
+        let o = Geodetic::new(46.5, -121.3, 0.0);
+        let (lat, lon) = destination_point(o, 217.0, 15_000.0);
+        let dist = great_circle_distance(o, Geodetic::new(lat, lon, 0.0));
+        assert!((dist - 15_000.0).abs() < 1.0, "got {dist}");
     }
 
     #[test]

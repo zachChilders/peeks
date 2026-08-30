@@ -295,6 +295,18 @@
       "type": "string",
       "oneOf": [
         {
+          "description": "Enables the capture_photo command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-capture-photo",
+          "markdownDescription": "Enables the capture_photo command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the capture_photo command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-capture-photo",
+          "markdownDescription": "Denies the capture_photo command without any pre-configured scope."
+        },
+        {
           "description": "Enables the start_camera command without any pre-configured scope.",
           "type": "string",
           "const": "allow-start-camera",
@@ -367,10 +379,10 @@
           "markdownDescription": "Denies the stop_motion_updates command without any pre-configured scope."
         },
         {
-          "description": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-start-camera`\n- `allow-stop-camera`\n- `allow-start-heading-updates`\n- `allow-stop-heading-updates`\n- `allow-start-motion-updates`\n- `allow-stop-motion-updates`",
+          "description": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-start-camera`\n- `allow-stop-camera`\n- `allow-start-heading-updates`\n- `allow-stop-heading-updates`\n- `allow-start-motion-updates`\n- `allow-stop-motion-updates`\n- `allow-capture-photo`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-start-camera`\n- `allow-stop-camera`\n- `allow-start-heading-updates`\n- `allow-stop-heading-updates`\n- `allow-start-motion-updates`\n- `allow-stop-motion-updates`"
+          "markdownDescription": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-start-camera`\n- `allow-stop-camera`\n- `allow-start-heading-updates`\n- `allow-stop-heading-updates`\n- `allow-start-motion-updates`\n- `allow-stop-motion-updates`\n- `allow-capture-photo`"
         }
       ]
     }

@@ -86,3 +86,12 @@ export async function startMotionUpdates(
 export async function stopMotionUpdates(): Promise<void> {
   await invoke('plugin:camera|stop_motion_updates')
 }
+
+/**
+ * Snapshot the camera preview plus the AR overlay on top of it (labels, leader lines,
+ * anything else rendered in HTML), and save the result to the Photos library. Prompts
+ * for add-only Photos access on first use. iOS only.
+ */
+export async function capturePhoto(): Promise<void> {
+  await invoke('plugin:camera|capture_photo')
+}

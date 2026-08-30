@@ -10,6 +10,7 @@ Default permissions for the plugin
 - `allow-stop-heading-updates`
 - `allow-start-motion-updates`
 - `allow-stop-motion-updates`
+- `allow-capture-photo`
 
 ## Permission Table
 
@@ -19,6 +20,32 @@ Default permissions for the plugin
 <th>Description</th>
 </tr>
 
+
+<tr>
+<td>
+
+`camera:allow-capture-photo`
+
+</td>
+<td>
+
+Enables the capture_photo command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`camera:deny-capture-photo`
+
+</td>
+<td>
+
+Denies the capture_photo command without any pre-configured scope.
+
+</td>
+</tr>
 
 <tr>
 <td>

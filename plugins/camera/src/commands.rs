@@ -38,3 +38,8 @@ pub(crate) async fn start_motion_updates<R: Runtime>(
 pub(crate) async fn stop_motion_updates<R: Runtime>(app: AppHandle<R>) -> Result<()> {
     app.camera().stop_motion_updates()
 }
+
+#[command]
+pub(crate) async fn capture_photo<R: Runtime>(app: AppHandle<R>) -> Result<()> {
+    app.camera().capture_photo()
+}

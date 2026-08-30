@@ -115,6 +115,14 @@ impl<R: Runtime> Camera<R> {
             .run_mobile_plugin("stopMotionUpdates", ())
             .map_err(Into::into)
     }
+
+    /// Snapshots the camera preview plus the AR overlay on top of it, and saves the
+    /// result to the Photos library (prompting for add-only access on first use).
+    pub fn capture_photo(&self) -> crate::Result<()> {
+        self.0
+            .run_mobile_plugin("capturePhoto", ())
+            .map_err(Into::into)
+    }
 }
 
 #[derive(serde::Serialize)]

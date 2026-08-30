@@ -77,6 +77,80 @@
   white-space: nowrap;
 }
 
+.ar-horizon {
+  position: absolute;
+  inset: 0;
+  z-index: 400;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.ar-horizon polyline {
+  fill: none;
+  stroke: #29e0ff;
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+  opacity: 0.85;
+}
+
+.camera-debug-log {
+  position: absolute;
+  left: 12px;
+  /* Clears the capture button (68px + its own bottom offset) sitting centered below it. */
+  bottom: calc(max(28px, env(safe-area-inset-bottom) + 16px) + 84px);
+  right: 12px;
+  z-index: 1000;
+  max-height: 32vh;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.6);
+  color: #7cffb2;
+  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+  line-height: 1.4;
+  padding: 8px 10px;
+  border-radius: 8px;
+  pointer-events: none;
+  white-space: pre-wrap;
+}
+
+.camera-capture-button {
+  position: absolute;
+  bottom: max(28px, env(safe-area-inset-bottom) + 16px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1001;
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.9);
+  background: rgba(0, 0, 0, 0.25);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.camera-capture-button:disabled {
+  opacity: 0.5;
+}
+
+.camera-capture-button-inner {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.camera-capture-flash {
+  position: absolute;
+  inset: 0;
+  z-index: 2000;
+  background: #fff;
+  pointer-events: none;
+}
+
 .camera-close-button {
   position: absolute;
   top: max(12px, env(safe-area-inset-top));

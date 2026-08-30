@@ -51,4 +51,8 @@ impl<R: Runtime> Camera<R> {
     pub fn stop_motion_updates(&self) -> crate::Result<()> {
         Ok(())
     }
+
+    pub fn capture_photo(&self) -> crate::Result<()> {
+        Err(crate::Error::Unsupported)
+    }
 }

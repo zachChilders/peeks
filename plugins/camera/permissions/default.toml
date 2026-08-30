@@ -7,4 +7,5 @@ permissions = [
   "allow-stop-heading-updates",
   "allow-start-motion-updates",
   "allow-stop-motion-updates",
+  "allow-capture-photo",
 ]

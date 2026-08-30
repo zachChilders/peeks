@@ -45,6 +45,16 @@ pub struct PlacedLabel {
     pub rect: Option<Rect>,
 }
 
+/// [`project_labels`]'s full result: placed peak labels, plus the debug DEM-horizon
+/// skyline (empty until [`set_horizon`] has been called) projected through the same
+/// camera pose.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectionResult {
+    pub labels: Vec<PlacedLabel>,
+    pub horizon: Vec<(f64, f64)>,
+}
+
 struct Entry {
     osm_id: i64,
     name: String,
@@ -59,10 +69,20 @@ const MARGIN: f64 = 60.0;
 const MAX_STACK: usize = 6;
 const LABEL_LINE_GAP: f64 = 4.0;
 
-/// Tauri-managed state: the current observer's peaks, precomputed and sorted
-/// nearest-first. Empty until the first `set_scene` call.
+/// Nominal range for projecting a horizon (azimuth, elevation) angle pair — the vector's
+/// scale doesn't matter for a pinhole projection, only its direction, so this is
+/// arbitrary; see [`geo::enu_from_look_angles`].
+const HORIZON_RANGE_M: f64 = 50_000.0;
+
+/// Tauri-managed state: the current observer's peaks (precomputed and sorted
+/// nearest-first) and debug DEM-horizon skyline. Both empty until `set_scene`/
+/// `set_horizon` are called.
 #[derive(Default)]
-pub struct Scene(Mutex<Vec<Entry>>);
+pub struct Scene {
+    entries: Mutex<Vec<Entry>>,
+    /// (azimuth_deg, elevation_deg) pairs from `peakcore::visibility::horizon_at_azimuth`.
+    horizon: Mutex<Vec<(f64, f64)>>,
+}
 
 impl Scene {
     fn set(&self, observer: Geodetic, peaks: Vec<PeakWithMetrics>) {
@@ -85,11 +105,15 @@ impl Scene {
             .collect();
         entries.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
-        *self.0.lock().unwrap() = entries.into_iter().map(|(_, e)| e).collect();
+        *self.entries.lock().unwrap() = entries.into_iter().map(|(_, e)| e).collect();
     }
 
-    fn project(&self, pose: &CameraPose) -> Vec<PlacedLabel> {
-        let entries = self.0.lock().unwrap();
+    fn set_horizon(&self, points: Vec<(f64, f64)>) {
+        *self.horizon.lock().unwrap() = points;
+    }
+
+    fn project(&self, pose: &CameraPose) -> ProjectionResult {
+        let entries = self.entries.lock().unwrap();
         let basis = pose.basis();
         let focal_px = pose.focal_px();
 
@@ -126,7 +150,7 @@ impl Scene {
 
         let placed = layout_labels(&candidates, |name| widths[name], MAX_STACK, LABEL_LINE_GAP);
 
-        onscreen
+        let labels = onscreen
             .iter()
             .zip(placed.iter())
             .map(|((e, _), p)| PlacedLabel {
@@ -135,7 +159,20 @@ impl Scene {
                 anchor: p.anchor,
                 rect: p.text_rect,
             })
-            .collect()
+            .collect();
+
+        let horizon = self
+            .horizon
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|&(az, el)| {
+                let v = geo::enu_from_look_angles(az, el, HORIZON_RANGE_M);
+                projection::project_with_basis(v, basis, focal_px, pose.width, pose.height)
+            })
+            .collect();
+
+        ProjectionResult { labels, horizon }
     }
 }
 
@@ -145,9 +182,17 @@ pub fn set_scene(observer: Geodetic, peaks: Vec<PeakWithMetrics>, scene: tauri::
     scene.set(observer, peaks);
 }
 
+/// Sets the debug DEM-horizon skyline as (azimuth_deg, elevation_deg) pairs, from the
+/// `compute_horizon` command. Independent of `set_scene` since it's optional debug data.
 #[tauri::command]
 #[specta::specta]
-pub fn project_labels(pose: CameraPose, scene: tauri::State<Scene>) -> Vec<PlacedLabel> {
+pub fn set_horizon(points: Vec<(f64, f64)>, scene: tauri::State<Scene>) {
+    scene.set_horizon(points);
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn project_labels(pose: CameraPose, scene: tauri::State<Scene>) -> ProjectionResult {
     scene.project(&pose)
 }
 
@@ -194,7 +239,7 @@ mod tests {
             width: 1200,
             height: 900,
         };
-        assert!(!scene.project(&pose).is_empty());
+        assert!(!scene.project(&pose).labels.is_empty());
     }
 
     /// Compute-only timing for `Scene::project` (basis + N dot products + cull +

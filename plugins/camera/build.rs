@@ -5,6 +5,7 @@ const COMMANDS: &[&str] = &[
   "stop_heading_updates",
   "start_motion_updates",
   "stop_motion_updates",
+  "capture_photo",
 ];
 
 fn main() {
