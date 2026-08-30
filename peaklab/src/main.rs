@@ -303,7 +303,7 @@ fn main() -> Result<()> {
                 let target = Geodetic::new(p.lat, p.lon, p.elev);
                 let (az, elev_angle, _) = geo::look_angles(observer, target);
                 let dist = geo::great_circle_distance(observer, target);
-                match visibility::check(&dem, observer, target, cfg) {
+                match visibility::check(dem.core(), observer, target, cfg) {
                     peaklab::visibility::Visibility::Visible => {
                         visible.push((p, az, elev_angle, dist))
                     }
@@ -427,7 +427,7 @@ fn main() -> Result<()> {
             for p in &peaks {
                 let target = Geodetic::new(p.lat, p.lon, p.elev);
                 if !matches!(
-                    visibility::check(&dem, observer, target, vis_cfg),
+                    visibility::check(dem.core(), observer, target, vis_cfg),
                     visibility::Visibility::Visible
                 ) {
                     continue;

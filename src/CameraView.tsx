@@ -24,6 +24,10 @@ function cardinal(deg: number): string {
 }
 
 const EYE_HEIGHT_M = 1.6;
+// Loaded first, so the overlay shows something before the full-radius fetch below
+// (which is far more expensive: both Overpass and the occlusion sampling in
+// filterVisiblePeaks scale with the number of peaks in range) finishes.
+const NEAR_RADIUS_M = 20_000;
 const PEAK_RADIUS_M = 100_000;
 // iPhone wide-camera horizontal FOV is roughly this, but not read from real device
 // intrinsics — a rough starting guess in the same spirit as peaklab's manual yaw tuning.
@@ -107,11 +111,51 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
   }, []);
 
   // Observer position + ground elevation, then nearby named peaks filtered down to the
-  // ones actually visible (terrain occlusion, via filterVisiblePeaks), then hand the
-  // scene to Rust once via setScene. Fetched once — no re-fetch-on-movement threshold in
-  // this v0 pass.
+  // ones actually visible (terrain occlusion via filterVisiblePeaks, which raycasts
+  // against a local DEM downloaded/cached on first use), then hand the scene to Rust
+  // once via setScene. Loaded in two passes — a small NEAR_RADIUS_M disc first (fewer
+  // peaks, smaller DEM region, fast) so the overlay has something on screen quickly,
+  // then the full PEAK_RADIUS_M disc replaces it once that larger Overpass query and DEM
+  // fetch finish. No re-fetch-on-movement threshold in this v0 pass.
   useEffect(() => {
     let cancelled = false;
+
+    async function loadRadius(observer: Geodetic, radiusM: number) {
+      const peaksResult = await commands.fetchPeaks(observer.lat, observer.lon, radiusM);
+      if (peaksResult.status === "error") throw new Error(peaksResult.error);
+      if (cancelled) return;
+
+      const visibleResult = await commands.filterVisiblePeaks(observer, peaksResult.data, radiusM);
+      if (visibleResult.status === "error") throw new Error(visibleResult.error);
+      const peaks = visibleResult.data;
+      if (cancelled) return;
+
+      // Text metrics can only come from the browser (canvas measureText has no Rust
+      // equivalent), so peak names are measured once, here, and shipped to Rust with
+      // the scene rather than re-measured on every 100ms tick. Must wait for the real
+      // font to be loaded first — measuring against a fallback font before
+      // -apple-system resolves would cache wrong widths for the session.
+      await document.fonts.ready;
+      if (cancelled) return;
+      if (!measureCtxRef.current) {
+        const canvas = document.createElement("canvas");
+        measureCtxRef.current = canvas.getContext("2d");
+      }
+      const ctx = measureCtxRef.current;
+      const metrics: PeakWithMetrics[] = peaks.map((p) => {
+        const [textW, textH] = measureText(ctx, p.name);
+        return {
+          osmId: p.osmId,
+          name: p.name,
+          geo: { lat: p.lat, lon: p.lon, alt: p.elev },
+          textW,
+          textH,
+        };
+      });
+
+      await commands.setScene(observer, metrics);
+      if (!cancelled) sceneReadyRef.current = true;
+    }
 
     async function start() {
       let step = "getCurrentPosition";
@@ -126,47 +170,11 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
           alt: groundElev + EYE_HEIGHT_M,
         };
 
-        step = "fetchPeaks";
-        const peaksResult = await commands.fetchPeaks(
-          pos.coords.latitude,
-          pos.coords.longitude,
-          PEAK_RADIUS_M,
-        );
-        if (peaksResult.status === "error") throw new Error(peaksResult.error);
-        if (cancelled) return;
+        step = "loadNearPeaks";
+        await loadRadius(observer, NEAR_RADIUS_M);
 
-        step = "filterVisiblePeaks";
-        const visibleResult = await commands.filterVisiblePeaks(observer, peaksResult.data);
-        if (visibleResult.status === "error") throw new Error(visibleResult.error);
-        const peaks = visibleResult.data;
-        if (cancelled) return;
-
-        // Text metrics can only come from the browser (canvas measureText has no Rust
-        // equivalent), so peak names are measured once, here, and shipped to Rust with
-        // the scene rather than re-measured on every 100ms tick. Must wait for the real
-        // font to be loaded first — measuring against a fallback font before
-        // -apple-system resolves would cache wrong widths for the session.
-        await document.fonts.ready;
-        if (cancelled) return;
-        if (!measureCtxRef.current) {
-          const canvas = document.createElement("canvas");
-          measureCtxRef.current = canvas.getContext("2d");
-        }
-        const ctx = measureCtxRef.current;
-        const metrics: PeakWithMetrics[] = peaks.map((p) => {
-          const [textW, textH] = measureText(ctx, p.name);
-          return {
-            osmId: p.osmId,
-            name: p.name,
-            geo: { lat: p.lat, lon: p.lon, alt: p.elev },
-            textW,
-            textH,
-          };
-        });
-
-        step = "setScene";
-        await commands.setScene(observer, metrics);
-        if (!cancelled) sceneReadyRef.current = true;
+        step = "loadFarPeaks";
+        await loadRadius(observer, PEAK_RADIUS_M);
       } catch (e) {
         if (!cancelled) {
           setError(`[${step}] ${e instanceof Error ? e.message : String(e)}`);

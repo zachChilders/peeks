@@ -28,12 +28,20 @@ tauri-plugin-barometer = { path = "../plugins/barometer" }
 tauri-plugin-camera = { path = "../plugins/camera" }
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "form", "rustls"] }
 thiserror = "2"
+# DEM tile fetching (dem.rs): async fs for the on-disk cache, spawn_blocking for the
+# CPU-bound decode. Tauri already depends on tokio transitively; this just names it so
+# dem.rs can use its API directly.
+tokio = { version = "1", features = ["fs", "rt"] }
 # Pinned with `=`: tauri-specta v2 is still pre-1.0 and its own docs warn that without
 # an exact pin, a routine `cargo update` can pull an incompatible specta/tauri-specta
 # pair and break the bindings build.
 specta = { version = "=2.0.0-rc.25", features = ["derive"] }
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 specta-typescript = "0.0.12"
+
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [[bin]]
 name = "generate-bindings"

@@ -8,6 +8,7 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+mod dem;
 mod peaks;
 mod scene;
 
@@ -48,6 +49,7 @@ pub fn run() {
         .plugin(tauri_plugin_barometer::init())
         .plugin(tauri_plugin_camera::init())
         .manage(scene::Scene::default())
+        .manage(dem::DemCache::default())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);

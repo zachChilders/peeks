@@ -5,8 +5,9 @@
 //! helper that `MapView.tsx` and `CameraView.tsx` each duplicated verbatim for their own
 //! single-point lookups — both now call the same [`get_elevation`] command.
 
-use peakcore::geo::{self, Geodetic};
+use peakcore::geo::Geodetic;
 use peakcore::overpass;
+use peakcore::visibility::{self, VisibilityConfig};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use specta_typescript::Number;
@@ -14,12 +15,6 @@ use specta_typescript::Number;
 const OVERPASS_URL: &str = "https://overpass-api.de/api/interpreter";
 const ELEVATION_URL: &str = "https://api.open-elevation.com/api/v1/lookup";
 const ELEVATION_BATCH_SIZE: usize = 100;
-
-/// Fractional distances (observer to peak) sampled for the terrain horizon check.
-/// Front-loaded: a given height of intervening terrain blocks a larger angle the closer
-/// it is to the observer, so nearby terrain needs finer sampling than far terrain.
-const OCCLUSION_SAMPLE_FRACS: &[f64] =
-    &[0.02, 0.05, 0.10, 0.18, 0.28, 0.40, 0.53, 0.66, 0.78, 0.88, 0.95];
 
 /// Mirrors peaklab's own client timeout. The previous mobile client
 /// (src-tauri/src/overpass.rs, now folded into this module) set none at all, which
@@ -40,6 +35,8 @@ pub enum Error {
     ElevationStatus(reqwest::StatusCode),
     #[error("Open-Elevation returned {got} elevations for {expected} points")]
     ElevationBatchMismatch { expected: usize, got: usize },
+    #[error(transparent)]
+    Dem(#[from] crate::dem::Error),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -169,44 +166,33 @@ async fn get_elevation_impl(lat: f64, lon: f64) -> Result<f64> {
 
 /// Drops peaks whose line of sight from `observer` is blocked by intervening terrain.
 ///
-/// For each peak, samples ground elevation at [`OCCLUSION_SAMPLE_FRACS`] points along
-/// the path to it and compares each sample's apparent elevation angle (via
-/// [`geo::look_angles`], which already folds in Earth curvature and refraction) against
-/// the peak's own. A sample that appears higher than the peak sits in front of it and
-/// blocks the view. All samples for all peaks are batched into one set of
-/// [`fetch_elevations`] calls rather than one round trip per peak.
-async fn filter_visible_peaks_impl(observer: Geodetic, peaks: Vec<Peak>) -> Result<Vec<Peak>> {
-    let client = http_client()?;
-    let n = OCCLUSION_SAMPLE_FRACS.len();
+/// Raycasts every ~60 m along the path to each peak (`peakcore::visibility::check`)
+/// against a local Copernicus GLO-30 DEM instead of a handful of points sampled over the
+/// network: real ridgelines only a posting or two wide were falling entirely between the
+/// old sparse network samples and reading as clear sightlines when they were not. The
+/// region covering `radius_m` around `observer` is downloaded once and cached in
+/// `dem_cache` (in memory for the session, on disk across launches), so the dense
+/// raycast itself costs no network round trips at all.
+async fn filter_visible_peaks_impl(
+    app: &tauri::AppHandle,
+    dem_cache: &crate::dem::DemCache,
+    observer: Geodetic,
+    peaks: Vec<Peak>,
+    radius_m: f64,
+) -> Result<Vec<Peak>> {
+    dem_cache.load_region(app, observer.lat, observer.lon, radius_m).await?;
 
-    let sample_points: Vec<(f64, f64)> = peaks
-        .iter()
-        .flat_map(|peak| {
-            let peak_geo = Geodetic::new(peak.lat, peak.lon, peak.elev);
-            OCCLUSION_SAMPLE_FRACS
-                .iter()
-                .map(move |&frac| geo::great_circle_point(observer, peak_geo, frac))
-        })
-        .collect();
-
-    let elevations = fetch_elevations(&client, &sample_points).await?;
-
-    Ok(peaks
-        .into_iter()
-        .enumerate()
-        .filter(|(i, peak)| {
-            let peak_geo = Geodetic::new(peak.lat, peak.lon, peak.elev);
-            let (_, peak_elev, _) = geo::look_angles(observer, peak_geo);
-            let start = i * n;
-            !sample_points[start..start + n]
-                .iter()
-                .zip(&elevations[start..start + n])
-                .any(|(&(lat, lon), &elev)| {
-                    geo::look_angles(observer, Geodetic::new(lat, lon, elev)).1 > peak_elev
+    Ok(dem_cache
+        .with_dem(|dem| {
+            peaks
+                .into_iter()
+                .filter(|peak| {
+                    let target = Geodetic::new(peak.lat, peak.lon, peak.elev);
+                    visibility::check(dem, observer, target, VisibilityConfig::default()).is_visible()
                 })
+                .collect()
         })
-        .map(|(_, peak)| peak)
-        .collect())
+        .await)
 }
 
 #[tauri::command]
@@ -224,8 +210,13 @@ pub async fn get_elevation(lat: f64, lon: f64) -> std::result::Result<f64, Strin
 #[tauri::command]
 #[specta::specta]
 pub async fn filter_visible_peaks(
+    app: tauri::AppHandle,
+    dem_cache: tauri::State<'_, crate::dem::DemCache>,
     observer: Geodetic,
     peaks: Vec<Peak>,
+    radius_m: f64,
 ) -> std::result::Result<Vec<Peak>, String> {
-    filter_visible_peaks_impl(observer, peaks).await.map_err(|e| e.to_string())
+    filter_visible_peaks_impl(&app, &dem_cache, observer, peaks, radius_m)
+        .await
+        .map_err(|e| e.to_string())
 }

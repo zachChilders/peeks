@@ -11,6 +11,9 @@ edition = "2021"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = "2"
+# Decodes Copernicus GLO-30 DEM tile bytes (already fetched by the caller) into a raw
+# elevation grid. Pure computation on an in-memory buffer, not I/O — see lib.rs.
+tiff = "0.10"
 # Reflection-only (compile-time type descriptors, no runtime weight): lets the types
 # that cross the Tauri IPC boundary — Geodetic, CameraPose, Rect — derive both their
 # serde impl and their generated-TypeScript shape from the same struct definition,
