@@ -15,6 +15,10 @@ class StartMotionArgs: Decodable {
   let channel: Channel
 }
 
+class StartIntrinsicsArgs: Decodable {
+  let channel: Channel
+}
+
 class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDelegate {
   private weak var webview: WKWebView?
   private let captureSession = AVCaptureSession()
@@ -31,6 +35,9 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
 
   private let motionManager = CMMotionManager()
   private var motionChannel: Channel?
+
+  private var intrinsicsChannel: Channel?
+  private var zoomObservation: NSKeyValueObservation?
 
   override init() {
     super.init()
@@ -135,6 +142,10 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
     }
     pinchGesture = nil
     pinchStartZoomFactor = nil
+    // Must go before `currentDevice` is cleared: the observation is registered on that
+    // device, and emitIntrinsics() reads it.
+    zoomObservation?.invalidate()
+    zoomObservation = nil
     currentDevice = nil
 
     webview?.isOpaque = true
@@ -404,6 +415,66 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
     motionManager.stopDeviceMotionUpdates()
     self.motionChannel = nil
     invoke.resolve()
+  }
+
+  //
+  // Capture intrinsics (real FOV + zoom, for the AR projection's focal length)
+  //
+
+  /// Streams what the capture device reports about its optics. The AR overlay previously
+  /// assumed a fixed on-screen horizontal FOV, which is wrong three ways on a phone: the
+  /// device's FOV is measured across the buffer's *long* axis (screen height in portrait),
+  /// `.resizeAspectFill` crops the width, and pinch zoom narrows both. Reporting the raw
+  /// numbers lets the projection derive a real focal length instead of guessing.
+  @objc public func startIntrinsicsUpdates(_ invoke: Invoke) throws {
+    let args = try invoke.parseArgs(StartIntrinsicsArgs.self)
+
+    guard let device = currentDevice else {
+      invoke.reject("Camera is not running; start it before requesting intrinsics.")
+      return
+    }
+    self.intrinsicsChannel = args.channel
+
+    // Zoom is user-driven and continuous, so observe the device property rather than
+    // emitting from the pinch handler: KVO also catches `ramp(toVideoZoomFactor:)` and
+    // the automatic lens transitions a virtual multi-lens device makes on its own.
+    zoomObservation = device.observe(\.videoZoomFactor, options: [.new]) { [weak self] _, _ in
+      self?.emitIntrinsics()
+    }
+
+    emitIntrinsics()
+    invoke.resolve()
+  }
+
+  @objc public func stopIntrinsicsUpdates(_ invoke: Invoke) throws {
+    zoomObservation?.invalidate()
+    zoomObservation = nil
+    self.intrinsicsChannel = nil
+    invoke.resolve()
+  }
+
+  private func emitIntrinsics() {
+    guard let channel = intrinsicsChannel, let device = currentDevice else { return }
+
+    let format = device.activeFormat
+    let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+    let long = Double(max(dims.width, dims.height))
+    let short = Double(min(dims.width, dims.height))
+
+    // On the virtual devices `backCameraDevice` prefers, `videoZoomFactor` is defined
+    // relative to the widest constituent lens and `videoFieldOfView` reports that same
+    // lens's FOV, so scaling the focal length by the zoom factor stays correct across
+    // lens switches. Unverified on real multi-lens hardware — if the overlay visibly
+    // jumps when zoom crosses a lens transition, that assumption is what broke.
+    let reading: JsonObject = [
+      "fovDeg": Double(format.videoFieldOfView),
+      "zoomFactor": Double(device.videoZoomFactor),
+      "bufferLongPx": long,
+      "bufferShortPx": short,
+      "timestamp": Int(Date().timeIntervalSince1970 * 1000),
+    ]
+
+    channel.send(reading)
   }
 }
 

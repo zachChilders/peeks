@@ -87,6 +87,52 @@ export async function stopMotionUpdates(): Promise<void> {
   await invoke('plugin:camera|stop_motion_updates')
 }
 
+export type CameraIntrinsicsReading = {
+  /**
+   * Field of view across the capture buffer's long axis, in degrees, at zoom 1.0.
+   * Held portrait, that axis maps to screen height — not width.
+   */
+  fovDeg: number
+  /**
+   * Current zoom, relative to the widest lens. 1.0 = unzoomed.
+   */
+  zoomFactor: number
+  /**
+   * Capture buffer dimensions in the sensor's native landscape orientation.
+   */
+  bufferLongPx: number
+  bufferShortPx: number
+  timestamp: number
+}
+
+/**
+ * Start streaming capture-device intrinsics: the native field of view, the current zoom
+ * factor, and the capture buffer size. Feed these to the AR projection so it derives a
+ * real focal length rather than assuming an on-screen FOV — the assumption is off by
+ * roughly 2x once the `resizeAspectFill` crop is accounted for.
+ *
+ * Emits once immediately, then on every zoom change. Requires the camera to already be
+ * running (`startCamera`), since the intrinsics come from the active capture device.
+ */
+export async function startIntrinsicsUpdates(
+  cb: (reading: CameraIntrinsicsReading | null, error?: string) => void
+): Promise<number> {
+  const channel = new Channel<CameraIntrinsicsReading | string>()
+  channel.onmessage = (message) => {
+    if (typeof message === 'string') {
+      cb(null, message)
+    } else {
+      cb(message)
+    }
+  }
+  await invoke('plugin:camera|start_intrinsics_updates', { channel })
+  return channel.id
+}
+
+export async function stopIntrinsicsUpdates(): Promise<void> {
+  await invoke('plugin:camera|stop_intrinsics_updates')
+}
+
 /**
  * Snapshot the camera preview plus the AR overlay on top of it (labels, leader lines,
  * anything else rendered in HTML), and save the result to the Photos library. Prompts

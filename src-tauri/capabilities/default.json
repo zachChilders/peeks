@@ -20,6 +20,8 @@
     "camera:allow-stop-heading-updates",
     "camera:allow-start-motion-updates",
     "camera:allow-stop-motion-updates",
+    "camera:allow-start-intrinsics-updates",
+    "camera:allow-stop-intrinsics-updates",
     "camera:allow-capture-photo"
   ]
 }

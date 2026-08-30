@@ -102,6 +102,32 @@ Denies the start_heading_updates command without any pre-configured scope.
 <tr>
 <td>
 
+`camera:allow-start-intrinsics-updates`
+
+</td>
+<td>
+
+Enables the start_intrinsics_updates command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`camera:deny-start-intrinsics-updates`
+
+</td>
+<td>
+
+Denies the start_intrinsics_updates command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `camera:allow-start-motion-updates`
 
 </td>
@@ -173,6 +199,32 @@ Enables the stop_heading_updates command without any pre-configured scope.
 <td>
 
 Denies the stop_heading_updates command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`camera:allow-stop-intrinsics-updates`
+
+</td>
+<td>
+
+Enables the stop_intrinsics_updates command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`camera:deny-stop-intrinsics-updates`
+
+</td>
+<td>
+
+Denies the stop_intrinsics_updates command without any pre-configured scope.
 
 </td>
 </tr>

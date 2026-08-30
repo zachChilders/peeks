@@ -7,11 +7,21 @@ import {
   stopHeadingUpdates,
   startMotionUpdates,
   stopMotionUpdates,
+  startIntrinsicsUpdates,
+  stopIntrinsicsUpdates,
   capturePhoto,
   type HeadingReading,
   type MotionReading,
+  type CameraIntrinsicsReading,
 } from "tauri-plugin-camera-api";
-import { commands, type CameraPose, type Geodetic, type PeakWithMetrics, type PlacedLabel } from "./bindings";
+import {
+  commands,
+  type CameraIntrinsics,
+  type CameraPose,
+  type Geodetic,
+  type PeakWithMetrics,
+  type PlacedLabel,
+} from "./bindings";
 import { fetchElevation } from "./lib/elevation";
 import "./CameraView.css";
 
@@ -54,12 +64,24 @@ const PEAK_RADIUS_M = 100_000;
 // claim about the full peak-fetch radius, and a smaller sweep is cheaper.
 const HORIZON_RANGE_M = 30_000;
 const DEBUG_LOG_LINES = 12;
-// iPhone wide-camera horizontal FOV is roughly this, but not read from real device
-// intrinsics — a rough starting guess in the same spirit as peaklab's manual yaw tuning.
-// Expect to calibrate against a real photo/device the same way.
-const HFOV_DEG = 63;
+// Fallback on-screen horizontal FOV, used only for the few ticks before the first
+// intrinsics reading arrives from the camera plugin. It is a poor stand-in — the real
+// value on a portrait phone is closer to 35 deg once the resizeAspectFill crop is
+// accounted for (see CameraIntrinsics in peakcore's projection.rs) — so anything that
+// depends on accurate placement should wait for real intrinsics rather than trust this.
+const FALLBACK_HFOV_DEG = 63;
 const PROJECTION_INTERVAL_MS = 100;
 const LABEL_FONT = "15px -apple-system, BlinkMacSystemFont, sans-serif";
+
+/** Drops the plugin reading's `timestamp` to get the shape the projection expects. */
+function toCameraIntrinsics(reading: CameraIntrinsicsReading): CameraIntrinsics {
+  return {
+    fovDeg: reading.fovDeg,
+    zoomFactor: reading.zoomFactor,
+    bufferLongPx: reading.bufferLongPx,
+    bufferShortPx: reading.bufferShortPx,
+  };
+}
 
 /** Pixel `(width, height)` of `text` in the AR label font, via an offscreen canvas —
  * canvas text measurement is a browser API with no Rust equivalent, which is why this
@@ -83,6 +105,7 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
   // interval reads these refs instead of re-rendering on every single event.
   const headingRef = useRef<HeadingReading | null>(null);
   const motionRef = useRef<MotionReading | null>(null);
+  const intrinsicsRef = useRef<CameraIntrinsics | null>(null);
   const sceneReadyRef = useRef(false);
   const measureCtxRef = useRef<CanvasRenderingContext2D | null>(null);
 
@@ -153,12 +176,29 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
           setError(`[startMotionUpdates] ${e instanceof Error ? e.message : String(e)}`);
         }
       }
+
+      // Must come after startCamera: intrinsics are read off the active capture device.
+      // Arrives once immediately, then again on every zoom change.
+      try {
+        await startIntrinsicsUpdates((reading, err) => {
+          if (err) {
+            setError(`[intrinsics] ${err}`);
+            return;
+          }
+          if (reading) intrinsicsRef.current = toCameraIntrinsics(reading);
+        });
+      } catch (e) {
+        if (!cancelled) {
+          setError(`[startIntrinsicsUpdates] ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
     }
 
     start();
 
     return () => {
       cancelled = true;
+      stopIntrinsicsUpdates().catch(() => {});
       stopMotionUpdates().catch(() => {});
       stopHeadingUpdates().catch(() => {});
       stopCamera().catch(() => {});
@@ -268,6 +308,10 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
   // measurement); `inFlight` skips a tick rather than piling up calls if one is slow.
   useEffect(() => {
     let inFlight = false;
+    // Last effective FOV written to the debug log, so only real changes get a line.
+    // -Infinity rather than NaN: every NaN comparison is false, which would suppress the
+    // first line entirely — the one that matters most.
+    let loggedHfov = Number.NEGATIVE_INFINITY;
 
     const id = setInterval(() => {
       if (inFlight || !sceneReadyRef.current) return;
@@ -279,9 +323,11 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
         yawDeg,
         pitchDeg: motionRef.current?.pitch ?? 0,
         rollDeg: motionRef.current?.roll ?? 0,
-        hfovDeg: HFOV_DEG,
+        hfovDeg: FALLBACK_HFOV_DEG,
         width: window.innerWidth,
         height: window.innerHeight,
+        // Takes precedence over hfovDeg above; non-null from the first reading onward.
+        intrinsics: intrinsicsRef.current,
       };
 
       inFlight = true;
@@ -292,9 +338,22 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
       // a device before trusting that the full round trip is still comfortably fast.
       commands
         .projectLabels(cam)
-        .then(({ labels, horizon }) => {
+        .then(({ labels, horizon, effectiveHfovDeg }) => {
           setPlacedLabels(labels);
           setHorizonPoints(horizon.map(([x, y]) => [x ?? 0, y ?? 0]));
+
+          // Logged from here rather than the intrinsics callback so the derived FOV comes
+          // straight from the projection that used it — no reimplementing the aspect-fill
+          // math in TS just to print it. Thresholded so pinching doesn't flood the log.
+          const hfov = effectiveHfovDeg ?? 0;
+          if (Math.abs(hfov - loggedHfov) > 0.5) {
+            loggedHfov = hfov;
+            const i = intrinsicsRef.current;
+            const src = i
+              ? `fov ${i.fovDeg!.toFixed(1)}° zoom ${i.zoomFactor!.toFixed(1)}x`
+              : "no intrinsics (fallback)";
+            log(`camera: ${src} -> hfov ${hfov.toFixed(1)}°`);
+          }
         })
         .catch((e) => setError(`[projectLabels] ${e instanceof Error ? e.message : String(e)}`))
         .finally(() => {

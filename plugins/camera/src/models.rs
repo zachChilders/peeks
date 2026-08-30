@@ -36,3 +36,26 @@ pub enum MotionEvent {
     Reading(MotionReading),
     Error(String),
 }
+
+/// What the capture device actually reports about its optics, so the AR projection can
+/// derive a real focal length instead of assuming an on-screen field of view. Emitted
+/// once when the stream opens and again whenever zoom changes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraIntrinsicsReading {
+    /// Field of view across the capture buffer's long axis, in degrees, at zoom 1.0.
+    pub fov_deg: f64,
+    /// Current zoom, relative to the widest lens. 1.0 = unzoomed.
+    pub zoom_factor: f64,
+    /// Capture buffer dimensions in the sensor's native landscape orientation.
+    pub buffer_long_px: f64,
+    pub buffer_short_px: f64,
+    pub timestamp: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum CameraIntrinsicsEvent {
+    Reading(CameraIntrinsicsReading),
+    Error(String),
+}
