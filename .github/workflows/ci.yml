@@ -34,6 +34,21 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      # mountain-view links Tauri's desktop backend even though this project only ships
+      # to iOS, because `cargo test --workspace` on Linux still compiles it for the host.
+      # These are Tauri's own documented Linux prerequisites (webkit2gtk, glib, gtk3).
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libgtk-3-dev \
+            patchelf
+
       # #[ignore]'d tests need network access (live Overpass, DEM tiles from S3) or the
       # gitignored local DEM cache and are skipped by `cargo test`'s default filter — same
       # command used to verify every change landed on main so far.
@@ -54,9 +69,25 @@ jobs:
   # shipping unverified beyond a syntax parse — `--no-sign` and `-t aarch64-sim` mean it
   # needs no certificate, no provisioning profile, and no secrets at all.
   ios-compile-check:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+
+      # The checked-in Xcode project is in objectVersion 77 (written by Xcode 26.2 on the
+      # machine that generated it) and older Xcode releases refuse to even open it
+      # ("future Xcode project file format"). Runner images default to a much older
+      # selected Xcode despite shipping newer ones side by side, so this has to be
+      # explicit rather than trusting the image's default.
+      - name: Select an Xcode new enough to open this project
+        run: |
+          set -euo pipefail
+          TARGET="/Applications/Xcode_26.2.app"
+          if [ ! -d "$TARGET" ]; then
+            TARGET="$(find /Applications -maxdepth 1 -name 'Xcode_*.app' | sort -V | tail -1)"
+          fi
+          echo "Selecting $TARGET"
+          sudo xcode-select -s "$TARGET"
+          xcodebuild -version
 
       - uses: dtolnay/rust-toolchain@stable
         with:
