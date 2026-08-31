@@ -1,0 +1,110 @@
+name: CI
+
+# Runs on every PR against main and on push to main (i.e. the merge commit itself, as a
+# second check). Deliberately carries no secrets, which is also what makes it safe to run
+# against PRs from anywhere: GitHub already withholds repo secrets from fork PRs, and this
+# workflow simply never asks for any, so there's nothing for that boundary to protect here.
+#
+# `release.yml` is the only workflow with signing secrets, and it only ever triggers on
+# push to main — never on a PR.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # mountain-view links Tauri's desktop backend even though this project only ships
+      # to iOS, because `cargo test --workspace` on Linux still compiles it for the host.
+      # These are Tauri's own documented Linux prerequisites (webkit2gtk, glib, gtk3).
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libgtk-3-dev \
+            patchelf
+
+      # #[ignore]'d tests need network access (live Overpass, DEM tiles from S3) or the
+      # gitignored local DEM cache and are skipped by `cargo test`'s default filter — same
+      # command used to verify every change landed on main so far.
+      - name: cargo test
+        run: cargo test --workspace
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - run: pnpm install --frozen-lockfile
+
+      # Chains build:plugins, build:bindings, tsc, and vite build (see package.json).
+      - name: pnpm build
+        run: pnpm build
+
+  # Compiles the Swift camera plugin and the Rust static lib against the real iOS SDK,
+  # unsigned, for the simulator. This is the check that would have caught the plugin code
+  # shipping unverified beyond a syntax parse — `--no-sign` and `-t aarch64-sim` mean it
+  # needs no certificate, no provisioning profile, and no secrets at all.
+  ios-compile-check:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      # The checked-in Xcode project is in objectVersion 77 (written by Xcode 26.2 on the
+      # machine that generated it) and older Xcode releases refuse to even open it
+      # ("future Xcode project file format"). Runner images default to a much older
+      # selected Xcode despite shipping newer ones side by side, so this has to be
+      # explicit rather than trusting the image's default.
+      - name: Select an Xcode new enough to open this project
+        run: |
+          set -euo pipefail
+          TARGET="/Applications/Xcode_26.2.app"
+          if [ ! -d "$TARGET" ]; then
+            TARGET="$(find /Applications -maxdepth 1 -name 'Xcode_*.app' | sort -V | tail -1)"
+          fi
+          echo "Selecting $TARGET"
+          sudo xcode-select -s "$TARGET"
+          xcodebuild -version
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios-sim,aarch64-apple-ios
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: tauri ios build (unsigned, simulator)
+        run: pnpm tauri ios build --debug --no-sign -t aarch64-sim --ci
