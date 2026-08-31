@@ -42,6 +42,7 @@ const CAMERA: CameraPose = CameraPose {
     hfov_deg: 66.0,
     width: 1200,
     height: 900,
+    intrinsics: None,
 };
 
 /// Margin matching `peaklab render`: a label may attach to a dot just off-frame.

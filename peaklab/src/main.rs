@@ -412,6 +412,7 @@ fn main() -> Result<()> {
                 hfov_deg: hfov,
                 width: w,
                 height: h,
+                intrinsics: None,
             };
 
             let vis_cfg = VisibilityConfig {

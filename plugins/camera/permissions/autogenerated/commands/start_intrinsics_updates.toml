@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-start-intrinsics-updates"
+description = "Enables the start_intrinsics_updates command without any pre-configured scope."
+commands.allow = ["start_intrinsics_updates"]
+
+[[permission]]
+identifier = "deny-start-intrinsics-updates"
+description = "Denies the start_intrinsics_updates command without any pre-configured scope."
+commands.deny = ["start_intrinsics_updates"]

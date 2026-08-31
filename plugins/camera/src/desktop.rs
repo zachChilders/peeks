@@ -52,6 +52,21 @@ impl<R: Runtime> Camera<R> {
         Ok(())
     }
 
+    pub fn start_intrinsics_updates<F: Fn(CameraIntrinsicsEvent) + Send + Sync + 'static>(
+        &self,
+        _callback: F,
+    ) -> crate::Result<u32> {
+        Ok(0)
+    }
+
+    pub(crate) fn start_intrinsics_updates_inner(&self, _channel: Channel) -> crate::Result<()> {
+        Ok(())
+    }
+
+    pub fn stop_intrinsics_updates(&self) -> crate::Result<()> {
+        Ok(())
+    }
+
     pub fn capture_photo(&self) -> crate::Result<()> {
         Err(crate::Error::Unsupported)
     }

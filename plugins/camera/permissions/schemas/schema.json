@@ -331,6 +331,18 @@
           "markdownDescription": "Denies the start_heading_updates command without any pre-configured scope."
         },
         {
+          "description": "Enables the start_intrinsics_updates command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-intrinsics-updates",
+          "markdownDescription": "Enables the start_intrinsics_updates command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_intrinsics_updates command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-intrinsics-updates",
+          "markdownDescription": "Denies the start_intrinsics_updates command without any pre-configured scope."
+        },
+        {
           "description": "Enables the start_motion_updates command without any pre-configured scope.",
           "type": "string",
           "const": "allow-start-motion-updates",
@@ -365,6 +377,18 @@
           "type": "string",
           "const": "deny-stop-heading-updates",
           "markdownDescription": "Denies the stop_heading_updates command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the stop_intrinsics_updates command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-stop-intrinsics-updates",
+          "markdownDescription": "Enables the stop_intrinsics_updates command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the stop_intrinsics_updates command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-stop-intrinsics-updates",
+          "markdownDescription": "Denies the stop_intrinsics_updates command without any pre-configured scope."
         },
         {
           "description": "Enables the stop_motion_updates command without any pre-configured scope.",

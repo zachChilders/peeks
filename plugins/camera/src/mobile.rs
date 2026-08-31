@@ -116,6 +116,46 @@ impl<R: Runtime> Camera<R> {
             .map_err(Into::into)
     }
 
+    /// Start streaming capture-device intrinsics (native FOV, zoom, buffer size).
+    pub fn start_intrinsics_updates<F: Fn(CameraIntrinsicsEvent) + Send + Sync + 'static>(
+        &self,
+        callback: F,
+    ) -> crate::Result<u32> {
+        let channel = Channel::new(move |event| {
+            let payload = match event {
+                InvokeResponseBody::Json(payload) => {
+                    serde_json::from_str::<CameraIntrinsicsEvent>(&payload).unwrap_or_else(|error| {
+                        CameraIntrinsicsEvent::Error(format!(
+                            "Couldn't deserialize intrinsics event payload: `{error}`"
+                        ))
+                    })
+                }
+                _ => CameraIntrinsicsEvent::Error("Unexpected intrinsics event payload.".to_string()),
+            };
+
+            callback(payload);
+
+            Ok(())
+        });
+        let id = channel.id();
+
+        self.start_intrinsics_updates_inner(channel)?;
+
+        Ok(id)
+    }
+
+    pub(crate) fn start_intrinsics_updates_inner(&self, channel: Channel) -> crate::Result<()> {
+        self.0
+            .run_mobile_plugin("startIntrinsicsUpdates", StartIntrinsicsPayload { channel })
+            .map_err(Into::into)
+    }
+
+    pub fn stop_intrinsics_updates(&self) -> crate::Result<()> {
+        self.0
+            .run_mobile_plugin("stopIntrinsicsUpdates", ())
+            .map_err(Into::into)
+    }
+
     /// Snapshots the camera preview plus the AR overlay on top of it, and saves the
     /// result to the Photos library (prompting for add-only access on first use).
     pub fn capture_photo(&self) -> crate::Result<()> {
@@ -132,5 +172,10 @@ struct StartHeadingPayload {
 
 #[derive(serde::Serialize)]
 struct StartMotionPayload {
+    channel: Channel,
+}
+
+#[derive(serde::Serialize)]
+struct StartIntrinsicsPayload {
     channel: Channel,
 }

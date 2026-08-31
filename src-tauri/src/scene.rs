@@ -53,6 +53,10 @@ pub struct PlacedLabel {
 pub struct ProjectionResult {
     pub labels: Vec<PlacedLabel>,
     pub horizon: Vec<(f64, f64)>,
+    /// Horizontal FOV the projection actually used, after the pose's intrinsics (native
+    /// FOV, zoom, aspect-fill crop) were resolved. Returned so the debug HUD can show the
+    /// derived number without reimplementing that math in TypeScript.
+    pub effective_hfov_deg: f64,
 }
 
 struct Entry {
@@ -172,7 +176,11 @@ impl Scene {
             })
             .collect();
 
-        ProjectionResult { labels, horizon }
+        ProjectionResult {
+            labels,
+            horizon,
+            effective_hfov_deg: pose.effective_hfov_deg(),
+        }
     }
 }
 
@@ -238,6 +246,7 @@ mod tests {
             hfov_deg: 66.0,
             width: 1200,
             height: 900,
+            intrinsics: None,
         };
         assert!(!scene.project(&pose).labels.is_empty());
     }
@@ -265,6 +274,7 @@ mod tests {
             hfov_deg: 66.0,
             width: 1200,
             height: 900,
+            intrinsics: None,
         };
 
         // Warm up (allocator, branch predictor) before timing.
