@@ -69,6 +69,14 @@ const DEBUG_LOG_LINES = 12;
 const FALLBACK_HFOV_DEG = 63;
 const PROJECTION_INTERVAL_MS = 100;
 const LABEL_FONT = "15px -apple-system, BlinkMacSystemFont, sans-serif";
+// CLHeading's own confidence, in degrees; negative means CoreLocation couldn't compute a
+// heading at all. Rejecting anything worse than this stops the app from confidently
+// drawing peaks at a heading that's flat-out wrong -- the usual cause is magnetic
+// interference (a parked car, a garage door) right after the compass starts, and it can
+// be off by 90+ degrees in that state. Set a bit above the skyline fitter's own +/-20 deg
+// yaw search range (peakcore::skyline::FitConfig): a heading this func accepts should be
+// close enough that the fitter could still refine it, not so far off that nothing could.
+const MAX_HEADING_ACCURACY_DEG = 30;
 
 /** Drops the plugin reading's `timestamp` to get the shape the projection expects. */
 function toCameraIntrinsics(reading: CameraIntrinsicsReading): CameraIntrinsics {
@@ -105,6 +113,11 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
   const motionRef = useRef<MotionReading | null>(null);
   const intrinsicsRef = useRef<CameraIntrinsics | null>(null);
   const sceneReadyRef = useRef(false);
+  // Whether the most recent heading reading was rejected for low accuracy, so the log
+  // line below fires once per transition instead of once per reading (headings arrive
+  // many times a second, and a sustained bad fix would otherwise flood the debug HUD's
+  // 12-line buffer and push everything else off screen).
+  const headingRejectedRef = useRef(false);
   const measureCtxRef = useRef<CanvasRenderingContext2D | null>(null);
 
   // Visible on-device pipeline trace: TestFlight builds have no attached debugger, so
@@ -150,10 +163,25 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
             setError(`[heading] ${err}`);
             return;
           }
-          if (reading) {
-            headingRef.current = reading;
-            setHeading(reading);
+          if (!reading) return;
+
+          if (reading.accuracy < 0 || reading.accuracy > MAX_HEADING_ACCURACY_DEG) {
+            if (!headingRejectedRef.current) {
+              headingRejectedRef.current = true;
+              log(`heading: rejected, accuracy ${reading.accuracy.toFixed(0)}°`);
+            }
+            // Leave headingRef/heading exactly as they are. If no good reading has ever
+            // arrived that keeps rendering "Orienting…"; if one already had, freezing on
+            // it beats overwriting with a heading we know is untrustworthy.
+            return;
           }
+
+          if (headingRejectedRef.current) {
+            headingRejectedRef.current = false;
+            log(`heading: locked, accuracy ${reading.accuracy.toFixed(0)}°`);
+          }
+          headingRef.current = reading;
+          setHeading(reading);
         });
       } catch (e) {
         if (!cancelled) {
