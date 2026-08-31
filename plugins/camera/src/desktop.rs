@@ -67,6 +67,21 @@ impl<R: Runtime> Camera<R> {
         Ok(())
     }
 
+    pub fn start_frame_updates<F: Fn(FrameEvent) + Send + Sync + 'static>(
+        &self,
+        _callback: F,
+    ) -> crate::Result<u32> {
+        Ok(0)
+    }
+
+    pub(crate) fn start_frame_updates_inner(&self, _channel: Channel) -> crate::Result<()> {
+        Ok(())
+    }
+
+    pub fn stop_frame_updates(&self) -> crate::Result<()> {
+        Ok(())
+    }
+
     pub fn capture_photo(&self) -> crate::Result<()> {
         Err(crate::Error::Unsupported)
     }

@@ -156,6 +156,49 @@ impl<R: Runtime> Camera<R> {
             .map_err(Into::into)
     }
 
+    /// Start streaming downsampled grayscale frames for skyline fitting.
+    ///
+    /// Intended to be driven from Rust rather than JavaScript: the fitter lives in the
+    /// app's Rust side, and routing tens of kilobytes per frame out to the webview and
+    /// back would be pure overhead. The `callback` runs on the channel's thread.
+    pub fn start_frame_updates<F: Fn(FrameEvent) + Send + Sync + 'static>(
+        &self,
+        callback: F,
+    ) -> crate::Result<u32> {
+        let channel = Channel::new(move |event| {
+            let payload = match event {
+                InvokeResponseBody::Json(payload) => serde_json::from_str::<FrameEvent>(&payload)
+                    .unwrap_or_else(|error| {
+                        FrameEvent::Error(format!(
+                            "Couldn't deserialize frame event payload: `{error}`"
+                        ))
+                    }),
+                _ => FrameEvent::Error("Unexpected frame event payload.".to_string()),
+            };
+
+            callback(payload);
+
+            Ok(())
+        });
+        let id = channel.id();
+
+        self.start_frame_updates_inner(channel)?;
+
+        Ok(id)
+    }
+
+    pub(crate) fn start_frame_updates_inner(&self, channel: Channel) -> crate::Result<()> {
+        self.0
+            .run_mobile_plugin("startFrameUpdates", StartFramesPayload { channel })
+            .map_err(Into::into)
+    }
+
+    pub fn stop_frame_updates(&self) -> crate::Result<()> {
+        self.0
+            .run_mobile_plugin("stopFrameUpdates", ())
+            .map_err(Into::into)
+    }
+
     /// Snapshots the camera preview plus the AR overlay on top of it, and saves the
     /// result to the Photos library (prompting for add-only access on first use).
     pub fn capture_photo(&self) -> crate::Result<()> {
@@ -177,5 +220,10 @@ struct StartMotionPayload {
 
 #[derive(serde::Serialize)]
 struct StartIntrinsicsPayload {
+    channel: Channel,
+}
+
+#[derive(serde::Serialize)]
+struct StartFramesPayload {
     channel: Channel,
 }

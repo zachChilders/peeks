@@ -16,6 +16,7 @@ import {
 } from "tauri-plugin-camera-api";
 import {
   commands,
+  type CalibrationStatus,
   type CameraIntrinsics,
   type CameraPose,
   type Geodetic,
@@ -96,6 +97,7 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
   const [debugLog, setDebugLog] = useState<string[]>([]);
   const [capturing, setCapturing] = useState(false);
   const [captureFlash, setCaptureFlash] = useState(false);
+  const [calibration, setCalibration] = useState<CalibrationStatus | null>(null);
 
   // Sensor readings arrive far faster than we want to re-layout labels; a periodic
   // interval reads these refs instead of re-rendering on every single event.
@@ -188,12 +190,21 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
           setError(`[startIntrinsicsUpdates] ${e instanceof Error ? e.message : String(e)}`);
         }
       }
+
+      // Skyline fitting. Frames go straight from the native plugin into Rust and never
+      // reach this layer, so there is nothing to receive here — only start and stop.
+      // Must follow startCamera: frames come off the running capture device.
+      const calib = await commands.startCalibration();
+      if (calib.status === "error" && !cancelled) {
+        log(`ERROR [startCalibration]: ${calib.error}`);
+      }
     }
 
     start();
 
     return () => {
       cancelled = true;
+      commands.stopCalibration().catch(() => {});
       stopIntrinsicsUpdates().catch(() => {});
       stopMotionUpdates().catch(() => {});
       stopHeadingUpdates().catch(() => {});
@@ -307,6 +318,7 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
     // -Infinity rather than NaN: every NaN comparison is false, which would suppress the
     // first line entirely — the one that matters most.
     let loggedHfov = Number.NEGATIVE_INFINITY;
+    let loggedCalibration = "";
 
     const id = setInterval(() => {
       if (inFlight || !sceneReadyRef.current) return;
@@ -333,7 +345,7 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
       // a device before trusting that the full round trip is still comfortably fast.
       commands
         .projectLabels(cam)
-        .then(({ labels, horizon, effectiveHfovDeg }) => {
+        .then(({ labels, horizon, effectiveHfovDeg, calibration }) => {
           setPlacedLabels(labels);
           setHorizonPoints(horizon.map(([x, y]) => [x ?? 0, y ?? 0]));
 
@@ -348,6 +360,15 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
               ? `fov ${i.fovDeg!.toFixed(1)}° zoom ${i.zoomFactor!.toFixed(1)}x`
               : "no intrinsics (fallback)";
             log(`camera: ${src} -> hfov ${hfov.toFixed(1)}°`);
+          }
+
+          // The fitter runs entirely in Rust off the native frame stream, so this line is
+          // the only visibility into whether it is working. `detail` says which gate
+          // rejected a frame rather than just going quiet.
+          setCalibration(calibration);
+          if (calibration.detail !== loggedCalibration) {
+            loggedCalibration = calibration.detail;
+            log(`fit: ${calibration.detail}`);
           }
         })
         .catch((e) => setError(`[projectLabels] ${e instanceof Error ? e.message : String(e)}`))
@@ -422,6 +443,18 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
           </div>
         ))}
       </div>
+
+      {/* Whether the skyline fitter has a lock, and what it is applying. The overlay
+          silently shifting is otherwise indistinguishable from a compass that drifted. */}
+      {calibration?.locked && (
+        <div className="camera-calibration">
+          fit {calibration.dYawDeg!.toFixed(1)}&deg; / {calibration.dPitchDeg!.toFixed(1)}&deg;
+          <span className="camera-calibration-rate">
+            {" "}
+            {calibration.accepted}/{calibration.frames}
+          </span>
+        </div>
+      )}
 
       <div className="camera-debug-log">{debugLog.join("\n")}</div>
 

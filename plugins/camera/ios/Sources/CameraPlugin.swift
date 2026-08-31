@@ -19,7 +19,13 @@ class StartIntrinsicsArgs: Decodable {
   let channel: Channel
 }
 
-class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDelegate {
+class StartFramesArgs: Decodable {
+  let channel: Channel
+}
+
+class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDelegate,
+  AVCaptureVideoDataOutputSampleBufferDelegate
+{
   private weak var webview: WKWebView?
   private let captureSession = AVCaptureSession()
   private let photoOutput = AVCapturePhotoOutput()
@@ -38,6 +44,14 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
 
   private var intrinsicsChannel: Channel?
   private var zoomObservation: NSKeyValueObservation?
+
+  private let videoOutput = AVCaptureVideoDataOutput()
+  private let frameQueue = DispatchQueue(label: "camera.frames", qos: .userInitiated)
+  /// Guards `frameChannel` and `lastFrameAt`, which the capture queue reads and the main
+  /// queue writes.
+  private let frameLock = NSLock()
+  private var frameChannel: Channel?
+  private var lastFrameAt: CFTimeInterval = 0
 
   override init() {
     super.init()
@@ -87,7 +101,27 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
           if self.captureSession.canAddOutput(self.photoOutput) {
             self.captureSession.addOutput(self.photoOutput)
           }
+          // Frames for skyline fitting. The Y plane of a biplanar YCbCr buffer *is* the
+          // grayscale image, so requesting this format means no colour conversion at all.
+          self.videoOutput.videoSettings = [
+            kCVPixelBufferPixelFormatTypeKey as String:
+              kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+          ]
+          // Fitting wants a recent frame, not every frame; dropping is correct here.
+          self.videoOutput.alwaysDiscardsLateVideoFrames = true
+          self.videoOutput.setSampleBufferDelegate(self, queue: self.frameQueue)
+          if self.captureSession.canAddOutput(self.videoOutput) {
+            self.captureSession.addOutput(self.videoOutput)
+          }
           self.captureSession.commitConfiguration()
+
+          // Portrait so the skyline runs horizontally in the delivered buffer — the
+          // detector scans columns. Matches what capturePhoto already does.
+          if let connection = self.videoOutput.connection(with: .video),
+            connection.isVideoOrientationSupported
+          {
+            connection.videoOrientation = .portrait
+          }
         }
 
         // Make the webview transparent so the native camera preview shows through from behind.
@@ -147,6 +181,13 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
     zoomObservation?.invalidate()
     zoomObservation = nil
     currentDevice = nil
+
+    // Stop delivery before dropping the channel, so an in-flight frame on the capture
+    // queue can't reach a torn-down consumer.
+    videoOutput.setSampleBufferDelegate(nil, queue: nil)
+    frameLock.lock()
+    frameChannel = nil
+    frameLock.unlock()
 
     webview?.isOpaque = true
     webview?.backgroundColor = nil
@@ -451,6 +492,93 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
     zoomObservation = nil
     self.intrinsicsChannel = nil
     invoke.resolve()
+  }
+
+  //
+  // Frames (for skyline fitting)
+  //
+
+  /// Target width of the downsampled frame. Small enough to be cheap to ship and process,
+  /// large enough that quantising the skyline to whole rows stays under about a quarter of
+  /// a degree — see `peakcore::skyline::fit`, whose accuracy is floored by exactly this.
+  private static let frameWidth = 160
+  /// Fitting wants a recent frame, not a fast one. Everything else is dropped.
+  private static let frameInterval: CFTimeInterval = 0.5
+
+  @objc public func startFrameUpdates(_ invoke: Invoke) throws {
+    let args = try invoke.parseArgs(StartFramesArgs.self)
+    frameLock.lock()
+    frameChannel = args.channel
+    frameLock.unlock()
+    invoke.resolve()
+  }
+
+  @objc public func stopFrameUpdates(_ invoke: Invoke) throws {
+    frameLock.lock()
+    frameChannel = nil
+    frameLock.unlock()
+    invoke.resolve()
+  }
+
+  func captureOutput(
+    _ output: AVCaptureOutput,
+    didOutput sampleBuffer: CMSampleBuffer,
+    from connection: AVCaptureConnection
+  ) {
+    frameLock.lock()
+    let channel = frameChannel
+    let since = CACurrentMediaTime() - lastFrameAt
+    if channel != nil && since >= Self.frameInterval {
+      lastFrameAt = CACurrentMediaTime()
+    }
+    frameLock.unlock()
+
+    guard let channel = channel, since >= Self.frameInterval else { return }
+    guard let pixels = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+
+    CVPixelBufferLockBaseAddress(pixels, .readOnly)
+    defer { CVPixelBufferUnlockBaseAddress(pixels, .readOnly) }
+
+    guard let base = CVPixelBufferGetBaseAddressOfPlane(pixels, 0) else { return }
+    let srcW = CVPixelBufferGetWidthOfPlane(pixels, 0)
+    let srcH = CVPixelBufferGetHeightOfPlane(pixels, 0)
+    let stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0)
+    guard srcW > 0, srcH > 0 else { return }
+
+    let dstW = min(Self.frameWidth, srcW)
+    let dstH = max(1, Int((Double(dstW) * Double(srcH) / Double(srcW)).rounded()))
+
+    // Box-average, matching `peakcore::skyline::downsample_gray`. Point-sampling would
+    // alias thin bright features (a lit cloud edge, a snow patch) into the brightness
+    // step the detector keys on, and a config tuned on desktop would stop transferring.
+    let src = base.assumingMemoryBound(to: UInt8.self)
+    var out = [UInt8](repeating: 0, count: dstW * dstH)
+    for dy in 0..<dstH {
+      let y0 = dy * srcH / dstH
+      let y1 = max(y0 + 1, min(srcH, (dy + 1) * srcH / dstH))
+      for dx in 0..<dstW {
+        let x0 = dx * srcW / dstW
+        let x1 = max(x0 + 1, min(srcW, (dx + 1) * srcW / dstW))
+        var sum = 0
+        var n = 0
+        for y in y0..<y1 {
+          let row = src + y * stride
+          for x in x0..<x1 {
+            sum += Int(row[x])
+            n += 1
+          }
+        }
+        out[dy * dstW + dx] = UInt8(sum / max(n, 1))
+      }
+    }
+
+    let reading: JsonObject = [
+      "width": dstW,
+      "height": dstH,
+      "gray": Data(out).base64EncodedString(),
+      "timestamp": Int(Date().timeIntervalSince1970 * 1000),
+    ]
+    channel.send(reading)
   }
 
   private func emitIntrinsics() {

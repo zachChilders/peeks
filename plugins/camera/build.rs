@@ -7,6 +7,8 @@ const COMMANDS: &[&str] = &[
   "stop_motion_updates",
   "start_intrinsics_updates",
   "stop_intrinsics_updates",
+  "start_frame_updates",
+  "stop_frame_updates",
   "capture_photo",
 ];
 

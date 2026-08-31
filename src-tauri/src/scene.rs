@@ -57,6 +57,8 @@ pub struct ProjectionResult {
     /// FOV, zoom, aspect-fill crop) were resolved. Returned so the debug HUD can show the
     /// derived number without reimplementing that math in TypeScript.
     pub effective_hfov_deg: f64,
+    /// State of the skyline fitter, including the correction applied to this projection.
+    pub calibration: crate::calibration::CalibrationStatus,
 }
 
 struct Entry {
@@ -180,6 +182,9 @@ impl Scene {
             labels,
             horizon,
             effective_hfov_deg: pose.effective_hfov_deg(),
+            // Overwritten by `project_labels`, which owns the calibration state; the
+            // geometry here has no opinion about it.
+            calibration: crate::calibration::CalibrationStatus::default(),
         }
     }
 }
@@ -198,10 +203,33 @@ pub fn set_horizon(points: Vec<(f64, f64)>, scene: tauri::State<Scene>) {
     scene.set_horizon(points);
 }
 
+/// The scene's `(azimuth, elevation)` horizon, for the skyline fitter.
+pub fn horizon_snapshot(scene: &Scene) -> Vec<(f64, f64)> {
+    scene.horizon.lock().unwrap().clone()
+}
+
 #[tauri::command]
 #[specta::specta]
-pub fn project_labels(pose: CameraPose, scene: tauri::State<Scene>) -> ProjectionResult {
-    scene.project(&pose)
+pub fn project_labels(
+    pose: CameraPose,
+    scene: tauri::State<Scene>,
+    calibration: tauri::State<crate::calibration::Calibration>,
+) -> ProjectionResult {
+    // Record the pose exactly as the sensors reported it, *before* applying any
+    // correction: the fitter solves for an offset relative to the raw reading, so feeding
+    // it a corrected pose would compound the correction every frame.
+    calibration.record_pose(&pose);
+
+    let (d_yaw, d_pitch) = calibration.offsets();
+    let corrected = CameraPose {
+        yaw_deg: pose.yaw_deg + d_yaw,
+        pitch_deg: pose.pitch_deg + d_pitch,
+        ..pose
+    };
+
+    let mut result = scene.project(&corrected);
+    result.calibration = calibration.status();
+    result
 }
 
 #[cfg(test)]

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-stop-frame-updates"
+description = "Enables the stop_frame_updates command without any pre-configured scope."
+commands.allow = ["stop_frame_updates"]
+
+[[permission]]
+identifier = "deny-stop-frame-updates"
+description = "Denies the stop_frame_updates command without any pre-configured scope."
+commands.deny = ["stop_frame_updates"]

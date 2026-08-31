@@ -44,6 +44,8 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
       commands::stop_motion_updates,
       commands::start_intrinsics_updates,
       commands::stop_intrinsics_updates,
+      commands::start_frame_updates,
+      commands::stop_frame_updates,
       commands::capture_photo
     ])
     .setup(|app, api| {
