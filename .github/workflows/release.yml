@@ -1,0 +1,115 @@
+name: Release
+
+# Publishes to TestFlight on every push to main — i.e. every merge, plus any direct push
+# an admin makes since branch protection allows that as an escape hatch. Never triggers on
+# a PR: this is the only workflow with signing secrets, and a PR branch never gets them,
+# by GitHub's own fork-PR secret policy and by this workflow simply not listening for
+# pull_request events at all.
+on:
+  push:
+    branches: [main]
+
+jobs:
+  # Re-checks rather than trusting that every commit on main already passed CI: branch
+  # protection lets an admin bypass it with a direct push, so this is defense in depth,
+  # not a duplicate of ci.yml for its own sake.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+  publish:
+    needs: test
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # A fixed Apple Distribution certificate, imported into a keychain scoped to this
+      # job and thrown away when the runner is destroyed. Deliberately NOT relying on
+      # -allowProvisioningUpdates to create a certificate from scratch here: an ephemeral
+      # runner has no persistent keychain, so that path would mint a brand-new
+      # certificate on every single run and exhaust Apple's per-account limit within a
+      # handful of merges. -allowProvisioningUpdates is still used below, but only to
+      # resolve the provisioning *profile* against this fixed identity.
+      - name: Import signing certificate
+        env:
+          BUILD_CERTIFICATE_P12: ${{ secrets.BUILD_CERTIFICATE_P12 }}
+          BUILD_CERTIFICATE_PASSWORD: ${{ secrets.BUILD_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          CERT_PATH="$RUNNER_TEMP/dist.p12"
+
+          echo -n "$BUILD_CERTIFICATE_P12" | base64 --decode -o "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$BUILD_CERTIFICATE_PASSWORD" -A \
+            -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Add to the search list rather than replace it, so system keychains stay
+          # available too. `list-keychains` prints quoted paths one per line; read them
+          # into an array instead of word-splitting a command substitution.
+          existing=()
+          while IFS= read -r line; do
+            existing+=("${line//\"/}")
+          done < <(security list-keychains -d user)
+          security list-keychain -d user -s "$KEYCHAIN_PATH" "${existing[@]}"
+
+          rm -f "$CERT_PATH"
+
+      - name: Write App Store Connect API key
+        env:
+          APPSTORE_API_KEY_P8: ${{ secrets.APPSTORE_API_KEY_P8 }}
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          echo -n "$APPSTORE_API_KEY_P8" | base64 --decode \
+            -o "$HOME/.appstoreconnect/private_keys/AuthKey_${APPSTORE_API_KEY_ID}.p8"
+
+      # 19 is the last build shipped by hand (0.1.0.19). run_number only increments for
+      # this workflow file, so this stays monotonic and ahead of everything already on
+      # TestFlight without reading the build number back out of a committed Info.plist —
+      # see the plan notes on why that file is now allowed to drift behind reality.
+      - name: Compute build number and publish
+        run: |
+          set -euo pipefail
+          BUILD_NUMBER=$((19 + GITHUB_RUN_NUMBER))
+          echo "Publishing build 0.1.0.${BUILD_NUMBER}"
+          scripts/ios-release.sh "$BUILD_NUMBER"
