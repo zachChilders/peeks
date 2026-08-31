@@ -115,6 +115,30 @@ pub fn horizon_at_azimuth(
     best
 }
 
+/// Sweep [`horizon_at_azimuth`] over a full revolution, yielding `(azimuth_deg,
+/// elevation_deg)` pairs.
+///
+/// Azimuths with no DEM coverage are omitted rather than zero-filled, so the result is
+/// sparse and consumers must not assume a fixed length or even spacing — the AR overlay
+/// splits its polyline on the resulting gaps.
+pub fn sweep_horizon(
+    dem: &Dem,
+    observer: Geodetic,
+    max_range_m: f64,
+    azimuth_step_deg: f64,
+    ray_step_m: f64,
+) -> Vec<(f64, f64)> {
+    let mut out = Vec::new();
+    let mut az = 0.0;
+    while az < 360.0 {
+        if let Some(el) = horizon_at_azimuth(dem, observer, az, max_range_m, ray_step_m) {
+            out.push((az, el));
+        }
+        az += azimuth_step_deg;
+    }
+    out
+}
+
 /// The horizon profile along a path: apparent elevation angle at each sampled distance.
 /// Exposed for plotting/debugging — not used by [`check`] itself, which short-circuits.
 pub fn profile(

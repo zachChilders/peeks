@@ -52,6 +52,37 @@ impl Default for DetectConfig {
     }
 }
 
+/// Box-average a grayscale image down to `dst_w` x `dst_h`.
+///
+/// Averaging rather than nearest-neighbour matters here: the detector keys on the
+/// brightness step across the skyline, and point-sampling a high-resolution frame aliases
+/// thin bright features (a snow patch, a lit cloud edge) into that step. The device side
+/// must reduce frames the same way for a desktop-tuned config to transfer.
+pub fn downsample_gray(src: &[u8], src_w: usize, src_h: usize, dst_w: usize, dst_h: usize) -> Vec<u8> {
+    if dst_w == 0 || dst_h == 0 || src_w == 0 || src_h == 0 || src.len() < src_w * src_h {
+        return vec![0; dst_w * dst_h];
+    }
+    let mut out = vec![0u8; dst_w * dst_h];
+    for dy in 0..dst_h {
+        let y0 = dy * src_h / dst_h;
+        let y1 = (((dy + 1) * src_h).div_ceil(dst_h)).min(src_h).max(y0 + 1);
+        for dx in 0..dst_w {
+            let x0 = dx * src_w / dst_w;
+            let x1 = (((dx + 1) * src_w).div_ceil(dst_w)).min(src_w).max(x0 + 1);
+            let mut sum = 0u32;
+            let mut n = 0u32;
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    sum += u32::from(src[y * src_w + x]);
+                    n += 1;
+                }
+            }
+            out[dy * dst_w + dx] = (sum / n.max(1)) as u8;
+        }
+    }
+    out
+}
+
 /// A detected skyline: the boundary row for each column, or `None` where the column had
 /// too little contrast to trust.
 #[derive(Debug, Clone)]

@@ -12,6 +12,7 @@
 
 pub mod dem;
 pub mod extract;
+pub mod fit;
 pub mod peaks;
 pub mod render;
 
