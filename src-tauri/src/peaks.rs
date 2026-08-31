@@ -1,5 +1,13 @@
-//! Named peaks (Overpass), snapped to and elevated from the same local Copernicus
-//! GLO-30 DEM used for terrain occlusion — see [`crate::dem`] and [`peakcore::dem`].
+//! Named peaks (from the bundled dataset), snapped to and elevated from the same local
+//! Copernicus GLO-30 DEM used for terrain occlusion — see [`crate::dem`] and
+//! [`peakcore::dem`].
+//!
+//! Peaks previously came from a live Overpass query on every launch. That was a hard
+//! network dependency in an app used where there is no signal, and `overpass-api.de`
+//! round-robins across backends of which one was reliably returning 504s. Since the only
+//! values that survived the fetch were the name and the OSM id — every coordinate and
+//! elevation below is overwritten by the DEM snap — the whole thing is now a ~20 MB file
+//! shipped with the app; see [`crate::peakstore`].
 //!
 //! Previously used Open-Elevation for both peak and observer elevation: a different
 //! dataset than the DEM the occlusion raycast samples, with no guarantee the two would
@@ -13,13 +21,10 @@
 //! single-point lookups — both now call the same [`get_elevation`] command.
 
 use peakcore::geo::Geodetic;
-use peakcore::overpass;
 use peakcore::visibility::{self, VisibilityConfig};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use specta_typescript::Number;
-
-const OVERPASS_URL: &str = "https://overpass-api.de/api/interpreter";
 
 /// DEM postings (~30 m) to search around each OSM peak node for the true local summit.
 /// Matches peaklab's own default: measured against 344 peaks' tagged elevations near
@@ -28,15 +33,10 @@ const OVERPASS_URL: &str = "https://overpass-api.de/api/interpreter";
 /// triples from window=0 to window=240 m (see `peaklab/src/peaks.rs`).
 const SNAP_HALF_WINDOW: i64 = 1;
 
-/// Extra margin, in metres, when loading the DEM for a peak fetch beyond the Overpass
+/// Extra margin, in metres, when loading the DEM for a peak fetch beyond the query
 /// radius itself — guarantees the snap window has coverage even for a peak right at the
 /// edge of that radius.
 const SNAP_DEM_MARGIN_M: f64 = 2_000.0;
-
-/// Mirrors peaklab's own client timeout. The previous mobile client
-/// (src-tauri/src/overpass.rs, now folded into this module) set none at all, which
-/// pinned the AR view at "Orienting..." forever on a hung Overpass request.
-const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
 /// Azimuth spacing for the debug DEM-horizon skyline. Matches `visibility::check`'s own
 /// along-path step for the ray-march distance step; this is the angular step of a full
@@ -48,12 +48,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("network request failed: {0}")]
-    Request(#[from] reqwest::Error),
-    #[error("Overpass returned {0}")]
-    OverpassStatus(reqwest::StatusCode),
     #[error(transparent)]
-    OverpassParse(#[from] overpass::ParseError),
+    PeakStore(#[from] crate::peakstore::Error),
     #[error(transparent)]
     Dem(#[from] crate::dem::Error),
     #[error("no DEM coverage at {lat}, {lon}")]
@@ -74,45 +70,20 @@ pub struct Peak {
     pub elev: f64,
 }
 
-fn http_client() -> Result<reqwest::Client> {
-    Ok(reqwest::Client::builder()
-        .timeout(REQUEST_TIMEOUT)
-        // Overpass rejects requests without a descriptive User-Agent (HTTP 406).
-        .user_agent("mountain-view/0.1 (AR peak identification)")
-        .build()?)
-}
-
-async fn fetch_named_peaks(
-    client: &reqwest::Client,
-    lat: f64,
-    lon: f64,
-    radius_m: f64,
-) -> Result<Vec<overpass::RawPeak>> {
-    let query = overpass::build_query(lat, lon, radius_m);
-
-    let resp = client
-        .post(OVERPASS_URL)
-        .form(&[("data", query.as_str())])
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        return Err(Error::OverpassStatus(resp.status()));
-    }
-
-    let body = resp.text().await?;
-    Ok(overpass::parse_response(&body)?)
-}
-
-async fn fetch_peaks_impl<R: tauri::Runtime>(
+/// Resolve dataset records against the DEM: snap each one to the highest posting within
+/// [`SNAP_HALF_WINDOW`] and take its elevation from there.
+///
+/// The dataset's own coordinates are only a seed for this search — every value the app
+/// displays comes out of the DEM, which is what keeps peak elevations consistent with the
+/// terrain the occlusion raycast samples. A peak outside DEM coverage is dropped.
+async fn snap_to_dem<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     dem_cache: &crate::dem::DemCache,
+    raw: Vec<peakcore::peakfile::Record>,
     lat: f64,
     lon: f64,
     radius_m: f64,
 ) -> Result<Vec<Peak>> {
-    let client = http_client()?;
-    let raw = fetch_named_peaks(&client, lat, lon, radius_m).await?;
-
     dem_cache
         .load_region(app, lat, lon, radius_m + SNAP_DEM_MARGIN_M)
         .await?;
@@ -133,6 +104,18 @@ async fn fetch_peaks_impl<R: tauri::Runtime>(
                 .collect()
         })
         .await)
+}
+
+async fn fetch_peaks_impl<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    dem_cache: &crate::dem::DemCache,
+    peak_store: &crate::peakstore::PeakStore,
+    lat: f64,
+    lon: f64,
+    radius_m: f64,
+) -> Result<Vec<Peak>> {
+    let raw = peak_store.peaks_in_radius(app, lat, lon, radius_m).await?;
+    snap_to_dem(app, dem_cache, raw, lat, lon, radius_m).await
 }
 
 async fn get_elevation_impl<R: tauri::Runtime>(
@@ -226,11 +209,12 @@ pub async fn compute_horizon(
 pub async fn fetch_peaks(
     app: tauri::AppHandle,
     dem_cache: tauri::State<'_, crate::dem::DemCache>,
+    peak_store: tauri::State<'_, crate::peakstore::PeakStore>,
     lat: f64,
     lon: f64,
     radius_m: f64,
 ) -> std::result::Result<Vec<Peak>, String> {
-    fetch_peaks_impl(&app, &dem_cache, lat, lon, radius_m)
+    fetch_peaks_impl(&app, &dem_cache, &peak_store, lat, lon, radius_m)
         .await
         .map_err(|e| e.to_string())
 }
@@ -266,18 +250,64 @@ pub async fn filter_visible_peaks(
 mod tests {
     use super::*;
 
-    /// End-to-end sanity check against real Overpass and DEM data: this is the piece
-    /// that changed when peak/observer elevation moved off Open-Elevation onto the same
-    /// DEM the occlusion raycast uses. Ignored by default since it needs network access;
-    /// run explicitly with `cargo test -p mountain-view -- --ignored`.
+    /// Guards the committed dataset itself, not the code that reads it.
+    ///
+    /// The Tauri build script only checks that the declared resource *exists*, so a
+    /// truncated or placeholder file builds and ships perfectly happily and simply
+    /// returns no peaks on device. This is deliberately not `#[ignore]`d — it needs no
+    /// network and it is the only thing standing between a bad regeneration and a
+    /// release. Regenerate with `cargo run --release -p peaklab -- extract-peaks`.
+    #[test]
+    fn committed_dataset_is_real() {
+        let bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/resources/peaks.mvpk"
+        ))
+        .expect("bundled peak dataset missing");
+        let file = peakcore::peakfile::PeakFile::parse(bytes)
+            .expect("bundled peak dataset is malformed");
+
+        // Current scope is North America (~126k peaks); a placeholder or a truncated
+        // write lands orders of magnitude below this.
+        assert!(
+            file.len() > 50_000,
+            "dataset has only {} peaks — did a regeneration fail partway?",
+            file.len()
+        );
+
+        // Mammoth Lakes: dense, well-mapped, and the area the AR overlay was first
+        // debugged against, so a lookup here exercises real tile indexing.
+        let near_mammoth = file
+            .peaks_in_radius(37.65214, -118.98018, 100_000.0)
+            .expect("querying the bundled dataset");
+        assert!(
+            near_mammoth.len() > 500,
+            "expected hundreds of peaks within 100km of Mammoth, got {}",
+            near_mammoth.len()
+        );
+        for name in ["Mount Morrison", "Bloody Mountain", "Laurel Mountain"] {
+            assert!(
+                near_mammoth.iter().any(|r| r.name == name),
+                "expected {name} in the dataset near Mammoth"
+            );
+        }
+    }
+
+    /// End-to-end sanity check that peaks and observer elevation come from the same DEM
+    /// — the property that broke when peak elevation used to come from Open-Elevation.
+    ///
+    /// Reads the committed dataset directly rather than going through [`PeakStore`],
+    /// which resolves a bundled app resource that `mock_app` has no notion of. Still
+    /// ignored by default because the DEM tiles themselves are fetched from S3; run with
+    /// `cargo test -p mountain-view -- --ignored`.
     #[tokio::test]
     #[ignore]
-    async fn fetch_peaks_and_get_elevation_use_the_same_dem() {
+    async fn peaks_and_elevation_use_the_same_dem() {
         let app = tauri::test::mock_app();
         let dem_cache = crate::dem::DemCache::default();
 
         // Paradise, Mount Rainier — well inside DEM coverage and near enough to the
-        // mountain to guarantee at least one named peak comes back from Overpass.
+        // mountain to guarantee named peaks in range.
         let (lat, lon) = (46.7857, -121.7353);
 
         let ground = get_elevation_impl(app.handle(), &dem_cache, lat, lon)
@@ -288,10 +318,21 @@ mod tests {
             "expected Paradise's ~1,650 m elevation, got {ground}"
         );
 
-        let peaks = fetch_peaks_impl(app.handle(), &dem_cache, lat, lon, 20_000.0)
+        let bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/resources/peaks.mvpk"
+        ))
+        .expect("bundled peak dataset missing — run `peaklab extract-peaks`");
+        let raw = peakcore::peakfile::PeakFile::parse(bytes)
+            .expect("bundled peak dataset is malformed")
+            .peaks_in_radius(lat, lon, 20_000.0)
+            .expect("querying the bundled dataset");
+        assert!(!raw.is_empty(), "expected named peaks within 20km of Rainier");
+
+        let peaks = snap_to_dem(app.handle(), &dem_cache, raw, lat, lon, 20_000.0)
             .await
-            .expect("failed to fetch peaks");
-        assert!(!peaks.is_empty(), "expected at least one named peak near Rainier");
+            .expect("failed to snap peaks to the DEM");
+        assert!(!peaks.is_empty(), "every peak was dropped by the DEM snap");
         for peak in &peaks {
             assert!(
                 peak.elev > 0.0,

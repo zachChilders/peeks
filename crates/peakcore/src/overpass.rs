@@ -21,6 +21,24 @@ pub fn build_query(lat: f64, lon: f64, radius_m: f64) -> String {
     )
 }
 
+/// Build an Overpass QL query for named `natural=peak` nodes in a bounding box, given as
+/// `(south, west, north, east)` in degrees.
+///
+/// Used only by the one-time bulk extract that builds the bundled dataset
+/// ([`crate::peakfile`]); the app queries that file, not Overpass. A bbox is the right
+/// shape for tiling the globe, where [`build_query`]'s `around:` disc is the right shape
+/// for "what can I see from here".
+/// Gets a far larger server-side budget than [`OVERPASS_QUERY_TIMEOUT_S`]: a measured
+/// 4°×10° cell over the Alps — the densest peak region on Earth — needed 98 s of server
+/// time to return its 58,740 peaks, which the interactive 90 s budget would have killed.
+/// Only the one-time extract pays this, never a user.
+pub fn build_bbox_query(south: f64, west: f64, north: f64, east: f64) -> String {
+    const BULK_QUERY_TIMEOUT_S: u32 = 300;
+    format!(
+        "[out:json][timeout:{BULK_QUERY_TIMEOUT_S}];\nnode[\"natural\"=\"peak\"][\"name\"]({south},{west},{north},{east});\nout body;"
+    )
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RawPeak {
     pub osm_id: i64,

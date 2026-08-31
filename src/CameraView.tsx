@@ -54,10 +54,6 @@ function splitHorizonSegments(points: [number, number][], maxGapPx: number): [nu
 }
 
 const EYE_HEIGHT_M = 1.6;
-// Loaded first, so the overlay shows something before the full-radius fetch below
-// (which is far more expensive: both Overpass and the occlusion sampling in
-// filterVisiblePeaks scale with the number of peaks in range) finishes.
-const NEAR_RADIUS_M = 20_000;
 const PEAK_RADIUS_M = 100_000;
 // How far out the debug DEM-horizon skyline is swept. Deliberately smaller than
 // PEAK_RADIUS_M: it's a visual sanity check against the nearby terrain in frame, not a
@@ -208,24 +204,26 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
   // Observer position + ground elevation, then nearby named peaks filtered down to the
   // ones actually visible (terrain occlusion via filterVisiblePeaks, which raycasts
   // against a local DEM downloaded/cached on first use), then hand the scene to Rust
-  // once via setScene. Loaded in two passes — a small NEAR_RADIUS_M disc first (fewer
-  // peaks, smaller DEM region, fast) so the overlay has something on screen quickly,
-  // then the full PEAK_RADIUS_M disc replaces it once that larger Overpass query and DEM
-  // fetch finish. No re-fetch-on-movement threshold in this v0 pass.
+  // once via setScene.
+  //
+  // This used to run in two passes — a small disc first so something appeared on screen
+  // while the slow 100km Overpass query finished. Peaks now come from a dataset bundled
+  // with the app, so the full radius resolves off a local file and the staged load has
+  // nothing left to hide. No re-fetch-on-movement threshold in this v0 pass.
   useEffect(() => {
     let cancelled = false;
 
-    async function loadRadius(observer: Geodetic, radiusM: number, label: string) {
+    async function loadPeaks(observer: Geodetic, radiusM: number) {
       const peaksResult = await commands.fetchPeaks(observer.lat, observer.lon, radiusM);
       if (peaksResult.status === "error") throw new Error(peaksResult.error);
       if (cancelled) return;
-      log(`${label}: fetched ${peaksResult.data.length} named peaks (radius ${radiusM / 1000}km)`);
+      log(`peaks: ${peaksResult.data.length} named peaks (radius ${radiusM / 1000}km)`);
 
       const visibleResult = await commands.filterVisiblePeaks(observer, peaksResult.data, radiusM);
       if (visibleResult.status === "error") throw new Error(visibleResult.error);
       const peaks = visibleResult.data;
       if (cancelled) return;
-      log(`${label}: ${peaks.length}/${peaksResult.data.length} visible after occlusion filter`);
+      log(`peaks: ${peaks.length}/${peaksResult.data.length} visible after occlusion filter`);
 
       // Text metrics can only come from the browser (canvas measureText has no Rust
       // equivalent), so peak names are measured once, here, and shipped to Rust with
@@ -252,7 +250,7 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
 
       await commands.setScene(observer, metrics);
       if (!cancelled) sceneReadyRef.current = true;
-      log(`${label}: scene set (${peaks.length} peaks)`);
+      log(`peaks: scene set (${peaks.length} peaks)`);
     }
 
     async function loadHorizon(observer: Geodetic) {
@@ -279,14 +277,11 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
           alt: groundElev + EYE_HEIGHT_M,
         };
 
-        step = "loadNearPeaks";
-        await loadRadius(observer, NEAR_RADIUS_M, "near");
+        step = "loadPeaks";
+        await loadPeaks(observer, PEAK_RADIUS_M);
 
         step = "loadHorizon";
         await loadHorizon(observer);
-
-        step = "loadFarPeaks";
-        await loadRadius(observer, PEAK_RADIUS_M, "far");
       } catch (e) {
         if (!cancelled) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -429,6 +424,13 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
       </div>
 
       <div className="camera-debug-log">{debugLog.join("\n")}</div>
+
+      {/* Peak names and positions come from the bundled OSM extract, which is ODbL — so
+          shipping it in the app is redistribution and this notice is a licence
+          obligation, not decoration. MapView carries the equivalent for its tile layer. */}
+      <div className="camera-attribution">
+        Peak data &copy; OpenStreetMap contributors, ODbL
+      </div>
 
       <button
         type="button"

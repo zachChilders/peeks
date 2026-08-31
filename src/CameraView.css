@@ -114,6 +114,20 @@
   white-space: pre-wrap;
 }
 
+/* Bottom-left, clear of the centered capture button. Deliberately low-contrast: it has
+   to be present for the ODbL licence, not prominent. */
+.camera-attribution {
+  position: absolute;
+  left: 12px;
+  bottom: max(6px, env(safe-area-inset-bottom));
+  z-index: 1000;
+  color: rgba(255, 255, 255, 0.65);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+  font-size: 9px;
+  letter-spacing: 0.01em;
+  pointer-events: none;
+}
+
 .camera-capture-button {
   position: absolute;
   bottom: max(28px, env(safe-area-inset-bottom) + 16px);

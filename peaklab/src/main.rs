@@ -128,6 +128,23 @@ enum Command {
         #[arg(long, default_value = "render.png")]
         out: std::path::PathBuf,
     },
+    /// Bulk-extract named OSM peaks into the dataset the app bundles.
+    ///
+    /// Walks the region in adaptively-subdivided bounding boxes. Each cell is cached
+    /// under `$PEAKLAB_DATA/extract`, so an interrupted run resumes — and because every
+    /// run snaps to one global cell grid, a scoped run's cells are reused verbatim if
+    /// the region is widened later. Run this rarely: the output is committed, and
+    /// regenerating adds ~20 MB to git history each time.
+    ExtractPeaks {
+        #[arg(long, default_value = "src-tauri/resources/peaks.mvpk")]
+        out: std::path::PathBuf,
+        /// Limit to `south,west,north,east` in degrees, snapped outward to the cell
+        /// grid. Omit for the whole globe (~690k peaks, several hours).
+        ///
+        /// North America: `--bbox 5,-172,84,-40`
+        #[arg(long, allow_hyphen_values = true, value_delimiter = ',')]
+        bbox: Option<Vec<f64>>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -470,6 +487,18 @@ fn main() -> Result<()> {
                 cam.vfov_deg(),
             );
             println!("wrote {}", out.display());
+        }
+
+        Command::ExtractPeaks { out, bbox } => {
+            let bounds = match bbox.as_deref() {
+                Some([s, w, n, e]) => Some((*s, *w, *n, *e)),
+                Some(other) => anyhow::bail!(
+                    "--bbox needs south,west,north,east — got {} value(s)",
+                    other.len()
+                ),
+                None => None,
+            };
+            peaklab::extract::extract_all(&data_dir(), &out, bounds)?;
         }
     }
 

@@ -11,6 +11,7 @@
 //! - [`render`] — drawing labels onto an image
 
 pub mod dem;
+pub mod extract;
 pub mod peaks;
 pub mod render;
 
