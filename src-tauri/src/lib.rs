@@ -10,6 +10,7 @@ fn greet(name: &str) -> String {
 
 mod dem;
 mod peaks;
+mod peakstore;
 mod scene;
 
 /// The single source of truth for which commands exist and what they look like.
@@ -52,6 +53,7 @@ pub fn run() {
         .plugin(tauri_plugin_camera::init())
         .manage(scene::Scene::default())
         .manage(dem::DemCache::default())
+        .manage(peakstore::PeakStore::default())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);

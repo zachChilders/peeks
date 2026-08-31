@@ -1,3 +1,6 @@
 /data/dem/
 /data/osm/
+# Per-cell Overpass responses from `extract-peaks`. Rebuildable, and only there so an
+# interrupted run resumes — the committed artifact is src-tauri/resources/peaks.mvpk.
+/data/extract/
 *.png

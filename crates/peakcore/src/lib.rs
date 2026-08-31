@@ -11,5 +11,6 @@
 pub mod dem;
 pub mod geo;
 pub mod overpass;
+pub mod peakfile;
 pub mod projection;
 pub mod visibility;

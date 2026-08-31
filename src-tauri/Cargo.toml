@@ -26,7 +26,9 @@ serde_json = { workspace = true }
 tauri-plugin-geolocation = "2.3.2"
 tauri-plugin-barometer = { path = "../plugins/barometer" }
 tauri-plugin-camera = { path = "../plugins/camera" }
-reqwest = { version = "0.13.4", default-features = false, features = ["json", "form", "rustls"] }
+# Only the DEM tile fetch uses this now, and that's a plain GET — the `form` feature went
+# away with the Overpass POST when peaks moved to the bundled dataset.
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
 thiserror = "2"
 # DEM tile fetching (dem.rs): async fs for the on-disk cache, spawn_blocking for the
 # CPU-bound decode. Tauri already depends on tokio transitively; this just names it so
