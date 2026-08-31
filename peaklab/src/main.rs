@@ -128,6 +128,49 @@ enum Command {
         #[arg(long, default_value = "render.png")]
         out: std::path::PathBuf,
     },
+    /// Detect the skyline in a photo and fit the DEM horizon to it (M5).
+    ///
+    /// Solves for the yaw and pitch offsets that best align the computed horizon to the
+    /// observed sky/terrain boundary — the desktop tuning loop for the on-device
+    /// auto-correction. Capture a photo from the app at a known position and run it here.
+    Fit {
+        #[arg(long, allow_hyphen_values = true)]
+        lat: f64,
+        #[arg(long, allow_hyphen_values = true)]
+        lon: f64,
+        /// Observer altitude override (metres, ellipsoidal). Defaults to DEM + eye height.
+        #[arg(long)]
+        alt: Option<f64>,
+        /// The photograph to fit against.
+        #[arg(long)]
+        photo: std::path::PathBuf,
+
+        /// Believed camera pose — what the device's sensors reported when the photo was
+        /// taken. The fit reports the correction to apply to these.
+        #[arg(long, allow_hyphen_values = true)]
+        yaw: f64,
+        #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
+        pitch: f64,
+        #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
+        roll: f64,
+        /// The *frame's* horizontal field of view. On device this comes from
+        /// `AVCaptureDevice.activeFormat.videoFieldOfView`; a photo carries no reliable
+        /// record of it, so it has to be supplied.
+        #[arg(long, default_value_t = 68.0)]
+        hfov: f64,
+
+        #[arg(long, default_value_t = 30.0)]
+        range_km: f64,
+        /// Width the frame is reduced to before detection. Smaller is faster but costs
+        /// angular accuracy directly — the boundary is quantised to whole rows.
+        #[arg(long, default_value_t = 160)]
+        work_width: usize,
+
+        /// Write a diagnostic image with the detected skyline and projected horizon drawn
+        /// over the photo.
+        #[arg(long)]
+        overlay: Option<std::path::PathBuf>,
+    },
     /// Bulk-extract named OSM peaks into the dataset the app bundles.
     ///
     /// Walks the region in adaptively-subdivided bounding boxes. Each cell is cached
@@ -487,6 +530,88 @@ fn main() -> Result<()> {
                 cam.vfov_deg(),
             );
             println!("wrote {}", out.display());
+        }
+
+        Command::Fit {
+            lat,
+            lon,
+            alt,
+            photo,
+            yaw,
+            pitch,
+            roll,
+            hfov,
+            range_km,
+            work_width,
+            overlay,
+        } => {
+            let mut dem = Dem::new(&dem_dir);
+            dem.load_region(lat, lon, 1_000.0)?;
+            let observer = Geodetic::new(
+                lat,
+                lon,
+                match alt {
+                    Some(a) => a,
+                    None => {
+                        dem.elevation_at(lat, lon)
+                            .context("no DEM coverage at the observer")?
+                            + EYE_HEIGHT_M
+                    }
+                },
+            );
+
+            let report = peaklab::fit::run(
+                &mut dem,
+                &photo,
+                observer,
+                yaw,
+                pitch,
+                roll,
+                hfov,
+                range_km * 1000.0,
+                work_width,
+                &Default::default(),
+                &Default::default(),
+                overlay.as_deref(),
+            )?;
+
+            println!("frame        {}x{} px", report.frame_w, report.frame_h);
+            println!("horizon      {} points", report.horizon_points);
+            println!("detected     {:.0}% of columns", report.coverage * 100.0);
+            println!();
+            match report.outcome {
+                Ok(f) => {
+                    println!("FIT ACCEPTED");
+                    println!("  yaw    {:+.2}°  -> {:.2}°", f.d_yaw_deg, yaw + f.d_yaw_deg);
+                    println!("  pitch  {:+.2}°  -> {:.2}°", f.d_pitch_deg, pitch + f.d_pitch_deg);
+                    println!("  rms    {:.2} px", f.rms_px);
+                    println!("  cover  {:.0}%", f.coverage * 100.0);
+                    println!("  unique {:.2}x", f.uniqueness);
+                }
+                Err(r) => {
+                    println!("FIT REJECTED");
+                    match r {
+                        peakcore::skyline::Reject::Coverage { got, needed } => println!(
+                            "  too few columns matched the horizon: {:.0}% < {:.0}%",
+                            got * 100.0,
+                            needed * 100.0
+                        ),
+                        peakcore::skyline::Reject::Residual { got, needed } => println!(
+                            "  best alignment still off by {got:.2} px (limit {needed:.2})"
+                        ),
+                        peakcore::skyline::Reject::Ambiguous { got, needed } => println!(
+                            "  a distant yaw matched nearly as well: {got:.2}x < {needed:.2}x"
+                        ),
+                        peakcore::skyline::Reject::NoData => {
+                            println!("  nothing to fit (empty horizon or no detected skyline)")
+                        }
+                    }
+                }
+            }
+            if let Some(path) = &overlay {
+                println!();
+                println!("wrote {}", path.display());
+            }
         }
 
         Command::ExtractPeaks { out, bbox } => {

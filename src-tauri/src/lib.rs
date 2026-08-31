@@ -8,6 +8,7 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+mod calibration;
 mod dem;
 mod peaks;
 mod peakstore;
@@ -26,6 +27,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
         scene::set_scene,
         scene::set_horizon,
         scene::project_labels,
+        calibration::start_calibration,
+        calibration::stop_calibration,
     ])
 }
 
@@ -54,6 +57,7 @@ pub fn run() {
         .manage(scene::Scene::default())
         .manage(dem::DemCache::default())
         .manage(peakstore::PeakStore::default())
+        .manage(calibration::Calibration::default())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);

@@ -53,6 +53,19 @@ pub(crate) async fn stop_intrinsics_updates<R: Runtime>(app: AppHandle<R>) -> Re
 }
 
 #[command]
+pub(crate) async fn start_frame_updates<R: Runtime>(
+    app: AppHandle<R>,
+    channel: Channel,
+) -> Result<()> {
+    app.camera().start_frame_updates_inner(channel)
+}
+
+#[command]
+pub(crate) async fn stop_frame_updates<R: Runtime>(app: AppHandle<R>) -> Result<()> {
+    app.camera().stop_frame_updates()
+}
+
+#[command]
 pub(crate) async fn capture_photo<R: Runtime>(app: AppHandle<R>) -> Result<()> {
     app.camera().capture_photo()
 }

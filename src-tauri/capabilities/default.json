@@ -22,6 +22,8 @@
     "camera:allow-stop-motion-updates",
     "camera:allow-start-intrinsics-updates",
     "camera:allow-stop-intrinsics-updates",
+    "camera:allow-start-frame-updates",
+    "camera:allow-stop-frame-updates",
     "camera:allow-capture-photo"
   ]
 }

@@ -59,3 +59,24 @@ pub enum CameraIntrinsicsEvent {
     Reading(CameraIntrinsicsReading),
     Error(String),
 }
+
+/// A downsampled grayscale camera frame, for skyline fitting.
+///
+/// Delivered at a low rate (~2 Hz) and already reduced to ~160 px wide by the native side,
+/// so this is a few tens of kilobytes rather than a full video frame.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameReading {
+    pub width: usize,
+    pub height: usize,
+    /// Base64 `width * height` grayscale bytes, row-major.
+    pub gray: String,
+    pub timestamp: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FrameEvent {
+    Reading(FrameReading),
+    Error(String),
+}

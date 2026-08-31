@@ -30,6 +30,9 @@ tauri-plugin-camera = { path = "../plugins/camera" }
 # away with the Overpass POST when peaks moved to the bundled dataset.
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
 thiserror = "2"
+# Camera frames arrive from the Swift plugin as base64 in a JSON channel payload; Tauri's
+# Swift Channel only sends JSON, so there is no raw-bytes path to use instead.
+base64 = "0.22"
 # DEM tile fetching (dem.rs): async fs for the on-disk cache, spawn_blocking for the
 # CPU-bound decode. Tauri already depends on tokio transitively; this just names it so
 # dem.rs can use its API directly.

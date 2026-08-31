@@ -319,6 +319,18 @@
           "markdownDescription": "Denies the start_camera command without any pre-configured scope."
         },
         {
+          "description": "Enables the start_frame_updates command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-frame-updates",
+          "markdownDescription": "Enables the start_frame_updates command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_frame_updates command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-frame-updates",
+          "markdownDescription": "Denies the start_frame_updates command without any pre-configured scope."
+        },
+        {
           "description": "Enables the start_heading_updates command without any pre-configured scope.",
           "type": "string",
           "const": "allow-start-heading-updates",
@@ -365,6 +377,18 @@
           "type": "string",
           "const": "deny-stop-camera",
           "markdownDescription": "Denies the stop_camera command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the stop_frame_updates command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-stop-frame-updates",
+          "markdownDescription": "Enables the stop_frame_updates command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the stop_frame_updates command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-stop-frame-updates",
+          "markdownDescription": "Denies the stop_frame_updates command without any pre-configured scope."
         },
         {
           "description": "Enables the stop_heading_updates command without any pre-configured scope.",

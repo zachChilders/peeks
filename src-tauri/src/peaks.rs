@@ -176,17 +176,13 @@ async fn compute_horizon_impl<R: tauri::Runtime>(
 
     Ok(dem_cache
         .with_dem(|dem| {
-            let mut out = Vec::new();
-            let mut az = 0.0;
-            while az < 360.0 {
-                if let Some(el) =
-                    visibility::horizon_at_azimuth(dem, observer, az, max_range_m, HORIZON_RAY_STEP_M)
-                {
-                    out.push((az, el));
-                }
-                az += HORIZON_AZIMUTH_STEP_DEG;
-            }
-            out
+            visibility::sweep_horizon(
+                dem,
+                observer,
+                max_range_m,
+                HORIZON_AZIMUTH_STEP_DEG,
+                HORIZON_RAY_STEP_M,
+            )
         })
         .await)
 }

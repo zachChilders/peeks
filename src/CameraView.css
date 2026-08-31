@@ -114,6 +114,25 @@
   white-space: pre-wrap;
 }
 
+/* Top-left, under the heading readout. Only rendered once the fitter has a lock, so its
+   presence is itself the signal that the overlay is being corrected. */
+.camera-calibration {
+  position: absolute;
+  left: 12px;
+  top: max(56px, env(safe-area-inset-top) + 52px);
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.5);
+  color: #7cffb2;
+  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 4px 8px;
+  border-radius: 6px;
+  pointer-events: none;
+}
+
+.camera-calibration-rate {
+  opacity: 0.6;
+}
+
 /* Bottom-left, clear of the centered capture button. Deliberately low-contrast: it has
    to be present for the ODbL licence, not prominent. */
 .camera-attribution {

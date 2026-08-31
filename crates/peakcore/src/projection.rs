@@ -50,6 +50,26 @@ impl CameraIntrinsics {
             .max(screen_h as f64 / self.buffer_long_px);
         f_buf * cover
     }
+
+    /// Focal length in *capture frame* pixels, for a frame scaled to `frame_long_px` on
+    /// its long axis.
+    ///
+    /// Distinct from [`focal_px`](Self::focal_px), and the two must not be confused. That
+    /// one describes the image after `resizeAspectFill` has cropped it to the screen, and
+    /// is what the on-screen overlay needs. This one describes the *uncropped* capture
+    /// buffer, and is what [`crate::skyline::fit`] needs — fitting against the raw frame
+    /// avoids modelling the crop at all, and keeps the sensor's full field of view, which
+    /// on a portrait phone is exactly the axis the display throws away.
+    ///
+    /// Pose corrections derived through this focal length still apply unchanged to the
+    /// display pose: yaw and pitch offsets describe where the camera points, not how its
+    /// image is later cropped.
+    pub fn frame_focal_px(&self, frame_long_px: f64) -> f64 {
+        let scale = frame_long_px / self.buffer_long_px;
+        (self.buffer_long_px / 2.0) / (self.fov_deg.to_radians() / 2.0).tan()
+            * self.zoom_factor
+            * scale
+    }
 }
 
 /// Camera orientation and intrinsics. `yaw`/`pitch`/`roll` describe where the camera is

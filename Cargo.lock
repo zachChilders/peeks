@@ -2690,6 +2690,7 @@ dependencies = [
 name = "mountain-view"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "peakcore",
  "reqwest 0.13.4",
  "serde",

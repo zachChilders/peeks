@@ -76,6 +76,32 @@ Denies the start_camera command without any pre-configured scope.
 <tr>
 <td>
 
+`camera:allow-start-frame-updates`
+
+</td>
+<td>
+
+Enables the start_frame_updates command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`camera:deny-start-frame-updates`
+
+</td>
+<td>
+
+Denies the start_frame_updates command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `camera:allow-start-heading-updates`
 
 </td>
@@ -173,6 +199,32 @@ Enables the stop_camera command without any pre-configured scope.
 <td>
 
 Denies the stop_camera command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`camera:allow-stop-frame-updates`
+
+</td>
+<td>
+
+Enables the stop_frame_updates command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`camera:deny-stop-frame-updates`
+
+</td>
+<td>
+
+Denies the stop_frame_updates command without any pre-configured scope.
 
 </td>
 </tr>
