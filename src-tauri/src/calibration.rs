@@ -8,9 +8,12 @@
 //! Frames are consumed here in Rust rather than in the webview. The plugin's channels
 //! support a Rust callback, so tens of kilobytes per frame never cross the IPC boundary.
 
+use std::collections::VecDeque;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
+use peakcore::geo;
 use peakcore::projection::{CameraIntrinsics, CameraPose};
 use peakcore::skyline::{self, DetectConfig, FitConfig, Reject};
 use serde::Serialize;
@@ -24,6 +27,22 @@ const SMOOTHING: f64 = 0.35;
 /// suspect and applied at reduced weight — a real pose change moves the *sensors* too,
 /// so a large jump in the residual offset usually means a misfit.
 const OUTLIER_DEG: f64 = 5.0;
+
+/// How far back `is_stable` looks to decide whether the phone has been held steady.
+/// Chosen to comfortably span the gap between a `record_pose` tick (~100ms) and the
+/// transport latency of a camera frame delivered from the native side (~500ms cadence
+/// plus IPC), so that gap stops mattering: if the pose barely moved across this window,
+/// it doesn't matter that we don't know its exact value at the frame's capture instant.
+const STABILITY_WINDOW: Duration = Duration::from_millis(300);
+
+/// Above this, `ingest_frame` skips the fit entirely rather than compute one. Chosen to
+/// comfortably reject deliberate panning (tens of deg/sec) while passing ordinary hand
+/// tremor while aiming (sub-1 deg/sec sustained) — averaging over `STABILITY_WINDOW` is
+/// what keeps a momentary jitter spike from being misread as sustained motion.
+const MAX_STABLE_ANGULAR_VELOCITY_DEG_PER_S: f64 = 5.0;
+
+/// Trim `pose_history` beyond this so a long session doesn't grow it unbounded.
+const POSE_HISTORY_MAX_AGE: Duration = Duration::from_millis(600);
 
 /// What the fitter is currently doing, for the debug HUD. TestFlight builds have no
 /// debugger, so "why is nothing being corrected" has to be answerable from a screenshot.
@@ -50,6 +69,10 @@ struct Inner {
     /// correction on every frame and walk the overlay off the terrain.
     last_pose: Option<CameraPose>,
     last_intrinsics: Option<CameraIntrinsics>,
+    /// `(recorded_at, yaw_deg, pitch_deg)` from recent `record_pose` calls, oldest first,
+    /// trimmed to `POSE_HISTORY_MAX_AGE`. Used only to answer "has the phone been held
+    /// steady lately" — see `is_stable`.
+    pose_history: VecDeque<(Instant, f64, f64)>,
     d_yaw_deg: f64,
     d_pitch_deg: f64,
     locked: bool,
@@ -63,6 +86,7 @@ impl Default for Inner {
         Self {
             last_pose: None,
             last_intrinsics: None,
+            pose_history: VecDeque::new(),
             d_yaw_deg: 0.0,
             d_pitch_deg: 0.0,
             locked: false,
@@ -84,6 +108,41 @@ impl Calibration {
         if pose.intrinsics.is_some() {
             g.last_intrinsics = pose.intrinsics;
         }
+
+        let now = Instant::now();
+        g.pose_history.push_back((now, pose.yaw_deg, pose.pitch_deg));
+        while g
+            .pose_history
+            .front()
+            .is_some_and(|&(at, _, _)| now.duration_since(at) > POSE_HISTORY_MAX_AGE)
+        {
+            g.pose_history.pop_front();
+        }
+    }
+
+    /// Whether the phone has been roughly still for `STABILITY_WINDOW`, judged from
+    /// `record_pose`'s own history rather than by correlating clocks with the frame's
+    /// capture time — both ends of this comparison are Rust's own monotonic clock, so no
+    /// cross-language timestamp reconciliation is needed.
+    ///
+    /// `false` when there isn't yet enough history to span the window: that's the
+    /// conservative default, matching how the whole system already starts `locked: false`
+    /// rather than optimistically trusting a single sample.
+    fn is_stable(history: &VecDeque<(Instant, f64, f64)>) -> bool {
+        let (Some(&(oldest_at, oldest_yaw, oldest_pitch)), Some(&(newest_at, newest_yaw, newest_pitch))) =
+            (history.front(), history.back())
+        else {
+            return false;
+        };
+
+        let dt = newest_at.duration_since(oldest_at).as_secs_f64();
+        if dt < STABILITY_WINDOW.as_secs_f64() * 0.5 {
+            return false;
+        }
+
+        let d_yaw = geo::angle_diff_deg(newest_yaw, oldest_yaw).abs();
+        let d_pitch = (newest_pitch - oldest_pitch).abs();
+        (d_yaw.max(d_pitch) / dt) <= MAX_STABLE_ANGULAR_VELOCITY_DEG_PER_S
     }
 
     /// Offsets to add to the sensor pose before projecting.
@@ -127,10 +186,22 @@ impl Calibration {
             return;
         }
 
-        let (pose, intrinsics) = {
+        let (pose, intrinsics, stable) = {
             let g = self.0.lock().unwrap();
-            (g.last_pose, g.last_intrinsics)
+            (g.last_pose, g.last_intrinsics, Self::is_stable(&g.pose_history))
         };
+        // `last_pose` below is whatever the most recent ~100ms tick recorded, and this
+        // frame's image may have been captured anywhere in the gap since (plus IPC
+        // transport time). While the phone is still, that gap is a non-issue — the pose
+        // barely changed either way. While panning, the gap has a consistent direction
+        // for the whole gesture, so every frame during it feeds the EMA a similarly
+        // biased "correction" that doesn't average out: this is the mechanism behind
+        // reported drift that compounds instead of settling, worse at high zoom because
+        // that's when panning to hunt for a peak happens most.
+        if !stable {
+            self.note("steady the phone to calibrate");
+            return;
+        }
         let Some(pose) = pose else {
             self.note("no pose yet");
             return;
@@ -284,21 +355,95 @@ mod tests {
         assert!(!c.status().locked);
     }
 
+    /// Seeds enough backdated, near-identical pose history for `is_stable` to pass,
+    /// without a real sleep — deterministic and fast, unlike waiting out
+    /// `STABILITY_WINDOW` in real time.
+    fn make_stable(c: &Calibration, pose: &CameraPose) {
+        let mut g = c.0.lock().unwrap();
+        g.last_pose = Some(*pose);
+        if pose.intrinsics.is_some() {
+            g.last_intrinsics = pose.intrinsics;
+        }
+        let now = Instant::now();
+        g.pose_history.push_back((now - STABILITY_WINDOW, pose.yaw_deg, pose.pitch_deg));
+        g.pose_history.push_back((now, pose.yaw_deg, pose.pitch_deg));
+    }
+
     #[test]
     fn refuses_to_fit_without_intrinsics() {
         // A guessed focal length would let the fit absorb focal error into yaw and pitch,
         // which is exactly the failure the intrinsics work removed.
         let c = Calibration::default();
-        c.record_pose(&CameraPose {
-            intrinsics: None,
-            ..pose()
-        });
+        make_stable(
+            &c,
+            &CameraPose {
+                intrinsics: None,
+                ..pose()
+            },
+        );
         // A correctly-sized frame, so this reaches the intrinsics check rather than
         // stopping at the length validation.
         let frame = base64::engine::general_purpose::STANDARD.encode([0u8; 4]);
         c.ingest_frame(&frame, 2, 2, &[(0.0, 0.0), (2.0, 0.0)]);
         assert_eq!(c.offsets(), (0.0, 0.0));
         assert!(c.status().detail.contains("intrinsics"));
+    }
+
+    #[test]
+    fn is_stable_false_with_no_or_insufficient_history() {
+        assert!(!Calibration::is_stable(&VecDeque::new()));
+
+        let mut history = VecDeque::new();
+        history.push_back((Instant::now(), 90.0, 0.0));
+        // A single sample spans zero time, well under half of STABILITY_WINDOW.
+        assert!(!Calibration::is_stable(&history));
+    }
+
+    #[test]
+    fn ingest_frame_proceeds_past_the_stability_gate_when_still() {
+        // Stable history but no intrinsics: if this reaches the intrinsics rejection
+        // rather than the motion one, the stability gate correctly let it through.
+        let c = Calibration::default();
+        make_stable(
+            &c,
+            &CameraPose {
+                intrinsics: None,
+                ..pose()
+            },
+        );
+        let frame = base64::engine::general_purpose::STANDARD.encode([0u8; 4]);
+        c.ingest_frame(&frame, 2, 2, &[(0.0, 0.0), (2.0, 0.0)]);
+        assert!(
+            c.status().detail.contains("intrinsics"),
+            "expected to reach the intrinsics check, got: {}",
+            c.status().detail
+        );
+    }
+
+    #[test]
+    fn ingest_frame_rejects_for_motion_even_with_everything_else_valid() {
+        // Pose swinging 40 degrees across the stability window -- well over a deliberate
+        // pan, let alone hand tremor -- with otherwise perfectly valid intrinsics and
+        // horizon. The regression test for the reported compounding-drift bug: this must
+        // never reach the fitter at all.
+        let c = Calibration::default();
+        {
+            let mut g = c.0.lock().unwrap();
+            let p = pose();
+            g.last_pose = Some(p);
+            g.last_intrinsics = p.intrinsics;
+            let now = Instant::now();
+            g.pose_history.push_back((now - STABILITY_WINDOW, 60.0, 0.0));
+            g.pose_history.push_back((now, 100.0, 0.0));
+        }
+        let frame = base64::engine::general_purpose::STANDARD.encode([0u8; 4]);
+        c.ingest_frame(&frame, 2, 2, &[(0.0, 0.0), (2.0, 0.0)]);
+        assert_eq!(c.offsets(), (0.0, 0.0));
+        assert!(
+            c.status().detail.contains("steady"),
+            "expected a motion rejection, got: {}",
+            c.status().detail
+        );
     }
 
     #[test]
