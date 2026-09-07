@@ -59,6 +59,15 @@ pub struct CalibrationStatus {
     /// Frames fitted and frames accepted since the camera started.
     pub frames: u32,
     pub accepted: u32,
+    /// Size of the last camera frame fitted, and the focal length used for it, in frame
+    /// pixels. Reported because everything the fitter concludes rests on these three
+    /// numbers being right, and nothing else on screen would reveal it if they were not:
+    /// a capture buffer arriving in the sensor's native landscape rather than portrait,
+    /// or intrinsics describing a different format than the one delivered, both show up
+    /// only as a residual that never converges. Zero until a frame has been fitted.
+    pub frame_w: u32,
+    pub frame_h: u32,
+    pub frame_focal_px: f64,
 }
 
 struct Inner {
@@ -79,6 +88,9 @@ struct Inner {
     detail: String,
     frames: u32,
     accepted: u32,
+    frame_w: u32,
+    frame_h: u32,
+    frame_focal_px: f64,
 }
 
 impl Default for Inner {
@@ -93,6 +105,9 @@ impl Default for Inner {
             detail: "waiting for frames".to_string(),
             frames: 0,
             accepted: 0,
+            frame_w: 0,
+            frame_h: 0,
+            frame_focal_px: 0.0,
         }
     }
 }
@@ -160,6 +175,9 @@ impl Calibration {
             detail: g.detail.clone(),
             frames: g.frames,
             accepted: g.accepted,
+            frame_w: g.frame_w,
+            frame_h: g.frame_h,
+            frame_focal_px: g.frame_focal_px,
         }
     }
 
@@ -239,6 +257,9 @@ impl Calibration {
 
         let mut g = self.0.lock().unwrap();
         g.frames += 1;
+        g.frame_w = width as u32;
+        g.frame_h = height as u32;
+        g.frame_focal_px = focal_px;
         match outcome {
             Ok(fit) => {
                 // A fit far from the current estimate is more likely a misfit than a real
@@ -271,7 +292,14 @@ impl Calibration {
                     Reject::Coverage { got, .. } => {
                         format!("no skyline ({:.0}% of columns)", got * 100.0)
                     }
-                    Reject::Residual { got, .. } => format!("poor match ({got:.1}px)"),
+                    Reject::Residual {
+                        got,
+                        needed,
+                        d_yaw_deg,
+                        d_pitch_deg,
+                    } => format!(
+                        "poor match {got:.1}px (>{needed:.0}) at {d_yaw_deg:+.1}/{d_pitch_deg:+.1}°"
+                    ),
                     Reject::Ambiguous { got, .. } => format!("ambiguous ridge ({got:.1}x)"),
                     Reject::NoData => "nothing to fit".to_string(),
                 };

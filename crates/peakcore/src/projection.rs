@@ -206,6 +206,92 @@ pub fn project_with_basis(
     Some((x, y))
 }
 
+/// Project a `(azimuth_deg, elevation_deg)` horizon sweep into drawable polylines.
+///
+/// A sweep is a ring of samples, and turning it into something a renderer can stroke
+/// means answering three questions the raw projected points cannot: which neighbouring
+/// samples are actually adjacent in azimuth (a sweep omits azimuths with no DEM coverage,
+/// so consecutive entries can straddle a hole), which points are in front of the camera
+/// at all, and which of the survivors are near enough the viewport to be worth sending.
+///
+/// All three are answered here, in the frame where the answers exist, rather than in the
+/// renderer. The overlay used to receive every front-hemisphere sample — around half of a
+/// 720-point sweep, with coordinates running to ±10⁶ px at the edges where the ray is
+/// nearly perpendicular to the view — and re-derive the breaks by splitting wherever two
+/// consecutive points landed further apart on screen than a viewport diagonal. That
+/// heuristic cannot tell a genuine coverage hole from the projection blowing up near
+/// ±90°, and it read the wrap-around and the far-off-screen tail as breaks too.
+///
+/// `azimuth_step_deg` is the sweep's own spacing; samples further apart than 1.5× it are
+/// treated as separated by a hole. `margin_px` keeps points that far outside the viewport,
+/// so a polyline still runs off the edge of the frame rather than stopping short of it.
+pub fn project_horizon(
+    horizon: &[(f64, f64)],
+    azimuth_step_deg: f64,
+    basis: ([f64; 3], [f64; 3], [f64; 3]),
+    focal_px: f64,
+    width: u32,
+    height: u32,
+    margin_px: f64,
+) -> Vec<Vec<(f64, f64)>> {
+    /// Nominal range for turning a look angle back into a direction vector. Scale is
+    /// irrelevant to a pinhole projection; only the direction matters.
+    const RANGE_M: f64 = 50_000.0;
+
+    let n = horizon.len();
+    if n < 2 {
+        return Vec::new();
+    }
+
+    let projected: Vec<Option<(f64, f64)>> = horizon
+        .iter()
+        .map(|&(az, el)| {
+            let v = crate::geo::enu_from_look_angles(az, el, RANGE_M);
+            project_with_basis(v, basis, focal_px, width, height)
+                .filter(|(x, y)| x.is_finite() && y.is_finite())
+        })
+        .collect();
+
+    let near = |(x, y): (f64, f64)| {
+        x >= -margin_px
+            && x <= width as f64 + margin_px
+            && y >= -margin_px
+            && y <= height as f64 + margin_px
+    };
+
+    let mut segments: Vec<Vec<(f64, f64)>> = Vec::new();
+    let mut current: Vec<(f64, f64)> = Vec::new();
+
+    // Pairs walk the ring, so the last pair closes 359.5° back onto 0°. A sweep that
+    // doesn't reach all the way round simply fails the adjacency test there.
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let adjacent =
+            crate::geo::angle_diff_deg(horizon[j].0, horizon[i].0).abs() <= azimuth_step_deg * 1.5;
+        let drawable = match (adjacent, projected[i], projected[j]) {
+            // One endpoint on (or near) screen is enough: that keeps the edge that
+            // crosses the frame boundary, so the line reaches it.
+            (true, Some(a), Some(b)) => near(a) || near(b),
+            _ => false,
+        };
+
+        if drawable {
+            let (a, b) = (projected[i].expect("drawable"), projected[j].expect("drawable"));
+            if current.is_empty() {
+                current.push(a);
+            }
+            current.push(b);
+        } else if !current.is_empty() {
+            segments.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        segments.push(current);
+    }
+
+    segments
+}
+
 /// A rectangle in pixel space, used for label-overlap testing.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 pub struct Rect {
@@ -393,6 +479,124 @@ mod tests {
         let expected = 500.0 / (66.0f64.to_radians() / 2.0).tan();
         assert!((cam.focal_px() - expected).abs() < 1e-9);
         assert!((cam.effective_hfov_deg() - 66.0).abs() < 1e-9);
+    }
+
+    /// A full 360 deg sweep at 0.5 deg, flat except for a bump, matching what the app
+    /// hands `project_horizon`.
+    fn full_sweep() -> Vec<(f64, f64)> {
+        (0..720)
+            .map(|i| {
+                let az = f64::from(i) * 0.5;
+                (az, 5.0 * (az.to_radians() * 3.0).sin())
+            })
+            .collect()
+    }
+
+    fn horizon_pose() -> CameraPose {
+        CameraPose {
+            yaw_deg: 203.0,
+            pitch_deg: -4.0,
+            roll_deg: 0.0,
+            hfov_deg: 63.0,
+            width: 402,
+            height: 874,
+            intrinsics: None,
+        }
+    }
+
+    #[test]
+    fn horizon_is_culled_to_the_viewport_and_stays_continuous_across_it() {
+        let pose = horizon_pose();
+        let segments = project_horizon(
+            &full_sweep(),
+            0.5,
+            pose.basis(),
+            pose.focal_px(),
+            pose.width,
+            pose.height,
+            200.0,
+        );
+
+        // The near-perpendicular rays that used to reach +/-10^6 px are gone: everything
+        // returned is within one point of the margin box.
+        let points: Vec<(f64, f64)> = segments.iter().flatten().copied().collect();
+        assert!(!points.is_empty(), "expected a horizon in front of the camera");
+        for &(x, y) in &points {
+            assert!(
+                x.abs() < 100_000.0 && y.abs() < 100_000.0,
+                "runaway coordinate ({x}, {y})"
+            );
+        }
+
+        // Half a degree of azimuth is a few pixels at this focal length, so a correctly
+        // assembled polyline has no large jumps inside a segment.
+        for seg in &segments {
+            for pair in seg.windows(2) {
+                let d = (pair[1].0 - pair[0].0).hypot(pair[1].1 - pair[0].1);
+                assert!(d < 200.0, "gap of {d}px inside a segment: {pair:?}");
+            }
+        }
+
+        // And the line still spans the frame rather than stopping at its edges.
+        let (min_x, max_x) = points.iter().fold((f64::MAX, f64::MIN), |(lo, hi), &(x, _)| {
+            (lo.min(x), hi.max(x))
+        });
+        assert!(min_x <= 0.0, "left edge not reached: {min_x}");
+        assert!(max_x >= f64::from(pose.width), "right edge not reached: {max_x}");
+    }
+
+    #[test]
+    fn horizon_breaks_where_the_sweep_has_a_coverage_hole() {
+        // `sweep_horizon` omits azimuths with no DEM coverage rather than zero-filling
+        // them, so consecutive entries can straddle a hole. Drawing across one would put
+        // a chord where there is no terrain data at all.
+        let sweep: Vec<(f64, f64)> = full_sweep()
+            .into_iter()
+            .filter(|&(az, _)| !(200.0..210.0).contains(&az))
+            .collect();
+        let pose = horizon_pose();
+        let segments = project_horizon(
+            &sweep,
+            0.5,
+            pose.basis(),
+            pose.focal_px(),
+            pose.width,
+            pose.height,
+            200.0,
+        );
+        assert!(
+            segments.len() >= 2,
+            "expected the hole to split the line, got {} segment(s)",
+            segments.len()
+        );
+    }
+
+    #[test]
+    fn horizon_facing_north_does_not_draw_across_the_wraparound() {
+        // Looking at 0 deg, the visible arc runs 315..360 and 0..45 — adjacent in azimuth
+        // but at opposite ends of the array. Joining them naively sweeps a line across the
+        // whole frame; dropping the pair leaves a seam the renderer never notices.
+        let pose = CameraPose {
+            yaw_deg: 0.0,
+            ..horizon_pose()
+        };
+        let segments = project_horizon(
+            &full_sweep(),
+            0.5,
+            pose.basis(),
+            pose.focal_px(),
+            pose.width,
+            pose.height,
+            200.0,
+        );
+        for seg in &segments {
+            for pair in seg.windows(2) {
+                let d = (pair[1].0 - pair[0].0).hypot(pair[1].1 - pair[0].1);
+                assert!(d < 200.0, "wraparound drew a {d}px chord: {pair:?}");
+            }
+        }
+        let n: usize = segments.iter().map(Vec::len).sum();
+        assert!(n > 100, "expected the arc either side of north, got {n} points");
     }
 
     #[test]

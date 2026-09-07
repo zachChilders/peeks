@@ -38,18 +38,6 @@ const SNAP_HALF_WINDOW: i64 = 1;
 /// edge of that radius.
 const SNAP_DEM_MARGIN_M: f64 = 2_000.0;
 
-/// Azimuth spacing for the debug DEM-horizon skyline. Matches `visibility::check`'s own
-/// along-path step for the ray-march distance step; this is the angular step of a full
-/// 360° sweep around the observer instead.
-///
-/// 0.5° rather than a coarser step because the gap between samples is a straight chord on
-/// screen: at a few km range (the common case for nearby ridgelines) 2° of azimuth is
-/// roughly 100m of ground, easily wide enough to skip a real saddle or notch and draw the
-/// line floating above it. This sweep runs once per observer position, not per projection
-/// tick, so the 4x sample cost buys fidelity where it doesn't cost frame time.
-const HORIZON_AZIMUTH_STEP_DEG: f64 = 0.5;
-const HORIZON_RAY_STEP_M: f64 = 60.0;
-
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
@@ -186,8 +174,8 @@ async fn compute_horizon_impl<R: tauri::Runtime>(
                 dem,
                 observer,
                 max_range_m,
-                HORIZON_AZIMUTH_STEP_DEG,
-                HORIZON_RAY_STEP_M,
+                visibility::HORIZON_AZIMUTH_STEP_DEG,
+                visibility::HORIZON_RAY_STEP_M,
             )
         })
         .await)

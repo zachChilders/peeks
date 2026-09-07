@@ -13,6 +13,26 @@
 use crate::dem::Dem;
 use crate::geo::{self, Geodetic};
 
+/// Azimuth spacing of a full horizon sweep, in degrees.
+///
+/// Lives here rather than at each call site because the app's overlay, the skyline
+/// fitter, and peaklab's desktop tuning harness all have to sweep the *same* horizon:
+/// `FitConfig`/`DetectConfig` are tuned against peaklab's output and then applied
+/// verbatim on device, so a coarser sweep in one of them silently shifts what
+/// `max_rms_px` means. They previously drifted — peaklab kept sweeping at 2° after the
+/// app moved to 0.5° — with nothing to catch it but the comment claiming they matched.
+///
+/// 0.5° rather than something coarser because the gap between samples is drawn as a
+/// straight chord: at a few km range (the common case for nearby ridgelines) 2° of
+/// azimuth is roughly 100 m of ground, easily wide enough to skip a real saddle or notch
+/// and leave the line floating above it. A sweep runs once per observer position, not per
+/// projection tick, so the 4× sample cost buys fidelity where it doesn't cost frame time.
+pub const HORIZON_AZIMUTH_STEP_DEG: f64 = 0.5;
+
+/// Distance between terrain samples along one horizon ray, in metres. Matches
+/// [`VisibilityConfig::step_m`]'s ≈2× DEM posting for the same reason.
+pub const HORIZON_RAY_STEP_M: f64 = 60.0;
+
 #[derive(Debug, Clone, Copy)]
 pub struct VisibilityConfig {
     /// Distance between terrain samples along the path, metres. The plan's 60 m

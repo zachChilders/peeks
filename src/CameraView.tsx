@@ -35,25 +35,6 @@ function cardinal(deg: number): string {
   return CARDINALS[Math.round(deg / 22.5) % 16];
 }
 
-/** Splits the horizon's screen points into separate polyline segments wherever two
- * consecutive points (sorted by azimuth, not screen position) land far apart on screen —
- * e.g. the 358°→0° wraparound, or a gap where a ray had no DEM coverage — so those don't
- * draw as a stray line sweeping across the frame. */
-function splitHorizonSegments(points: [number, number][], maxGapPx: number): [number, number][][] {
-  const segments: [number, number][][] = [];
-  let current: [number, number][] = [];
-  for (const point of points) {
-    const prev = current[current.length - 1];
-    if (prev && Math.hypot(point[0] - prev[0], point[1] - prev[1]) > maxGapPx) {
-      segments.push(current);
-      current = [];
-    }
-    current.push(point);
-  }
-  if (current.length > 0) segments.push(current);
-  return segments;
-}
-
 const EYE_HEIGHT_M = 1.6;
 const PEAK_RADIUS_M = 100_000;
 // How far out the debug DEM-horizon skyline is swept. Deliberately smaller than
@@ -101,7 +82,7 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
   const [heading, setHeading] = useState<HeadingReading | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [placedLabels, setPlacedLabels] = useState<PlacedLabel[]>([]);
-  const [horizonPoints, setHorizonPoints] = useState<[number, number][]>([]);
+  const [horizonSegments, setHorizonSegments] = useState<[number, number][][]>([]);
   const [debugLog, setDebugLog] = useState<string[]>([]);
   const [capturing, setCapturing] = useState(false);
   const [captureFlash, setCaptureFlash] = useState(false);
@@ -347,6 +328,10 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
     // first line entirely — the one that matters most.
     let loggedHfov = Number.NEGATIVE_INFINITY;
     let loggedCalibration = "";
+    // The frame geometry the fitter is actually running against, logged once when it
+    // first arrives. Constant for a session, and the one thing a "poor match" line cannot
+    // tell you on its own: see CalibrationStatus::frame_w in calibration.rs.
+    let loggedFrame = "";
 
     const id = setInterval(() => {
       if (inFlight || !sceneReadyRef.current) return;
@@ -375,7 +360,11 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
         .projectLabels(cam)
         .then(({ labels, horizon, effectiveHfovDeg, calibration }) => {
           setPlacedLabels(labels);
-          setHorizonPoints(horizon.map(([x, y]) => [x ?? 0, y ?? 0]));
+          // Already split into strokeable runs and culled to the viewport by
+          // `peakcore::projection::project_horizon` — see that function for why deciding
+          // where the line breaks needs the camera geometry rather than a screen-distance
+          // heuristic. Nothing left to do here but read the numbers.
+          setHorizonSegments(horizon.map((seg) => seg.map(([x, y]) => [x!, y!])));
 
           // Logged from here rather than the intrinsics callback so the derived FOV comes
           // straight from the projection that used it — no reimplementing the aspect-fill
@@ -394,6 +383,13 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
           // the only visibility into whether it is working. `detail` says which gate
           // rejected a frame rather than just going quiet.
           setCalibration(calibration);
+          if (calibration.frameW > 0) {
+            const frame = `${calibration.frameW}x${calibration.frameH} f=${calibration.frameFocalPx!.toFixed(0)}px`;
+            if (frame !== loggedFrame) {
+              loggedFrame = frame;
+              log(`fit: frame ${frame}`);
+            }
+          }
           if (calibration.detail !== loggedCalibration) {
             loggedCalibration = calibration.detail;
             log(`fit: ${calibration.detail}`);
@@ -414,8 +410,6 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
       ? heading.trueHeading
       : heading.magneticHeading
     : null;
-
-  const horizonSegments = splitHorizonSegments(horizonPoints, Math.max(window.innerWidth, window.innerHeight));
 
   return (
     <div className="camera-view">
