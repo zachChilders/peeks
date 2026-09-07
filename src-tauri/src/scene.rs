@@ -225,26 +225,23 @@ pub fn horizon_snapshot(scene: &Scene) -> Vec<(f64, f64)> {
     scene.horizon.lock().unwrap().clone()
 }
 
+/// Project the scene for one tick.
+///
+/// `pose.yaw_deg` is the raw compass reading and `relative_yaw_deg` the gyro's integral
+/// about the local vertical (`None` if the motion stream has produced nothing yet).
+/// Which of the two the overlay is actually pointed by is
+/// [`Calibration::resolve_pose`]'s decision, not this function's — see that module for
+/// why the compass is a prior rather than the heading.
 #[tauri::command]
 #[specta::specta]
 pub fn project_labels(
     pose: CameraPose,
+    relative_yaw_deg: Option<f64>,
     scene: tauri::State<Scene>,
     calibration: tauri::State<crate::calibration::Calibration>,
 ) -> ProjectionResult {
-    // Record the pose exactly as the sensors reported it, *before* applying any
-    // correction: the fitter solves for an offset relative to the raw reading, so feeding
-    // it a corrected pose would compound the correction every frame.
-    calibration.record_pose(&pose);
-
-    let (d_yaw, d_pitch) = calibration.offsets();
-    let corrected = CameraPose {
-        yaw_deg: pose.yaw_deg + d_yaw,
-        pitch_deg: pose.pitch_deg + d_pitch,
-        ..pose
-    };
-
-    let mut result = scene.project(&corrected);
+    let resolved = calibration.resolve_pose(&pose, relative_yaw_deg);
+    let mut result = scene.project(&resolved);
     result.calibration = calibration.status();
     result
 }

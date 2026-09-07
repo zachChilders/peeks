@@ -57,6 +57,10 @@ const LABEL_FONT = "15px -apple-system, BlinkMacSystemFont, sans-serif";
 // be off by 90+ degrees in that state. Set a bit above the skyline fitter's own +/-20 deg
 // yaw search range (peakcore::skyline::FitConfig): a heading this func accepts should be
 // close enough that the fitter could still refine it, not so far off that nothing could.
+//
+// That is now the compass's entire job. It has to land the overlay inside the fitter's
+// search window; the fitter supplies the absolute answer and the heading is then held on
+// the gyro datum without consulting this again (see src-tauri/src/calibration.rs).
 const MAX_HEADING_ACCURACY_DEG = 30;
 
 /** Drops the plugin reading's `timestamp` to get the shape the projection expects. */
@@ -340,6 +344,9 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
 
       const yawDeg = h.trueHeading >= 0 ? h.trueHeading : h.magneticHeading;
       const cam: CameraPose = {
+        // The compass reading. Whether the overlay is actually pointed by it or by the
+        // gyro datum below is decided in Rust (src-tauri/src/calibration.rs); once the
+        // skyline fitter has locked, this stops being consulted.
         yawDeg,
         pitchDeg: motionRef.current?.pitch ?? 0,
         rollDeg: motionRef.current?.roll ?? 0,
@@ -357,7 +364,7 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
       // display server to run the real WebView. Wrap this call in performance.now() on
       // a device before trusting that the full round trip is still comfortably fast.
       commands
-        .projectLabels(cam)
+        .projectLabels(cam, motionRef.current?.relativeYawDeg ?? null)
         .then(({ labels, horizon, effectiveHfovDeg, calibration }) => {
           setPlacedLabels(labels);
           // Already split into strokeable runs and culled to the viewport by
@@ -466,14 +473,20 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
         ))}
       </div>
 
-      {/* Whether the skyline fitter has a lock, and what it is applying. The overlay
-          silently shifting is otherwise indistinguishable from a compass that drifted. */}
+      {/* Once locked, the heading is held on the gyro datum and the compass is out of the
+          loop, so this line is the only place the compass error is visible at all — and
+          the age is how long the datum has been coasting on gyro drift since anything last
+          corrected it. Without both, an overlay silently sliding is indistinguishable from
+          one that is simply right. */}
       {calibration?.locked && (
         <div className="camera-calibration">
-          fit {calibration.dYawDeg!.toFixed(1)}&deg; / {calibration.dPitchDeg!.toFixed(1)}&deg;
+          compass {calibration.dYawDeg! >= 0 ? "+" : ""}
+          {calibration.dYawDeg!.toFixed(1)}&deg; / pitch {calibration.dPitchDeg! >= 0 ? "+" : ""}
+          {calibration.dPitchDeg!.toFixed(1)}&deg;
           <span className="camera-calibration-rate">
             {" "}
             {calibration.accepted}/{calibration.frames}
+            {calibration.lockAgeS !== null && ` · ${calibration.lockAgeS!.toFixed(0)}s ago`}
           </span>
         </div>
       )}
