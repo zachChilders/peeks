@@ -1,0 +1,155 @@
+.landing-view {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  box-sizing: border-box;
+  padding: max(24px, env(safe-area-inset-top)) 20px
+    calc(max(24px, env(safe-area-inset-bottom)) + 40px);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 28px;
+  background: linear-gradient(170deg, #0d1b2a 0%, #16324a 55%, #24506b 100%);
+  color: #f2f6f9;
+  font: 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  overflow: hidden;
+}
+
+.landing-header {
+  text-align: center;
+}
+
+.landing-title {
+  margin: 0;
+  font-size: 2.6em;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.landing-tagline {
+  margin: 6px 0 0;
+  color: rgba(242, 246, 249, 0.65);
+}
+
+.landing-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.landing-choice {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 2px 16px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 18px 20px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.landing-choice:active {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.landing-choice svg {
+  grid-row: 1 / span 2;
+  color: #7fd1ff;
+}
+
+.landing-choice-label {
+  font-size: 1.15em;
+  font-weight: 600;
+}
+
+.landing-choice-sub {
+  color: rgba(242, 246, 249, 0.6);
+  font-size: 0.85em;
+}
+
+.landing-status {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.22);
+  padding: 14px 16px;
+}
+
+.landing-status-headline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.9em;
+  color: rgba(242, 246, 249, 0.8);
+}
+
+.landing-status-error {
+  color: #ff9b9b;
+  word-break: break-word;
+}
+
+.landing-retry {
+  flex: none;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  color: inherit;
+  font: inherit;
+  font-size: 0.9em;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+
+.landing-stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.82em;
+  color: rgba(242, 246, 249, 0.5);
+}
+
+.landing-stage {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.landing-stage-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.landing-stage-done {
+  color: rgba(242, 246, 249, 0.85);
+}
+
+.landing-stage-done .landing-stage-dot {
+  background: #7cffb2;
+}
+
+.landing-stage-active {
+  color: rgba(242, 246, 249, 0.85);
+}
+
+.landing-stage-active .landing-stage-dot {
+  background: #7fd1ff;
+  animation: landing-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes landing-pulse {
+  50% {
+    opacity: 0.25;
+  }
+}

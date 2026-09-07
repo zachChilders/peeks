@@ -1,17 +1,11 @@
-import { useEffect, useRef, useState } from "react";
-import { getCurrentPosition } from "@tauri-apps/plugin-geolocation";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   startCamera,
   stopCamera,
-  startHeadingUpdates,
-  stopHeadingUpdates,
-  startMotionUpdates,
-  stopMotionUpdates,
   startIntrinsicsUpdates,
   stopIntrinsicsUpdates,
   capturePhoto,
   type HeadingReading,
-  type MotionReading,
   type CameraIntrinsicsReading,
 } from "tauri-plugin-camera-api";
 import {
@@ -19,11 +13,19 @@ import {
   type CalibrationStatus,
   type CameraIntrinsics,
   type CameraPose,
-  type Geodetic,
-  type PeakWithMetrics,
   type PlacedLabel,
 } from "./bindings";
-import { fetchElevation } from "./lib/elevation";
+import {
+  currentHeading,
+  currentMotion,
+  isSceneReady,
+  orientationSnapshot,
+  refreshOrientation,
+  subscribeHeading,
+  subscribeOrientation,
+} from "./lib/orientation";
+import { log } from "./lib/debugLog";
+import DebugDrawer from "./DebugDrawer";
 import "./CameraView.css";
 
 const CARDINALS = [
@@ -35,33 +37,15 @@ function cardinal(deg: number): string {
   return CARDINALS[Math.round(deg / 22.5) % 16];
 }
 
-const EYE_HEIGHT_M = 1.6;
-const PEAK_RADIUS_M = 100_000;
-// How far out the debug DEM-horizon skyline is swept. Deliberately smaller than
-// PEAK_RADIUS_M: it's a visual sanity check against the nearby terrain in frame, not a
-// claim about the full peak-fetch radius, and a smaller sweep is cheaper.
-const HORIZON_RANGE_M = 30_000;
-const DEBUG_LOG_LINES = 12;
 // Fallback on-screen horizontal FOV, used only for the few ticks before the first
 // intrinsics reading arrives from the camera plugin. It is a poor stand-in — the real
 // value on a portrait phone is closer to 35 deg once the resizeAspectFill crop is
 // accounted for (see CameraIntrinsics in peakcore's projection.rs) — so anything that
 // depends on accurate placement should wait for real intrinsics rather than trust this.
+// The fitter enforces exactly that: `ingest_frame` refuses to fit without real
+// intrinsics, so no ticks projected with this value can reach the calibration datum.
 const FALLBACK_HFOV_DEG = 63;
 const PROJECTION_INTERVAL_MS = 100;
-const LABEL_FONT = "15px -apple-system, BlinkMacSystemFont, sans-serif";
-// CLHeading's own confidence, in degrees; negative means CoreLocation couldn't compute a
-// heading at all. Rejecting anything worse than this stops the app from confidently
-// drawing peaks at a heading that's flat-out wrong -- the usual cause is magnetic
-// interference (a parked car, a garage door) right after the compass starts, and it can
-// be off by 90+ degrees in that state. Set a bit above the skyline fitter's own +/-20 deg
-// yaw search range (peakcore::skyline::FitConfig): a heading this func accepts should be
-// close enough that the fitter could still refine it, not so far off that nothing could.
-//
-// That is now the compass's entire job. It has to land the overlay inside the fitter's
-// search window; the fitter supplies the absolute answer and the heading is then held on
-// the gyro datum without consulting this again (see src-tauri/src/calibration.rs).
-const MAX_HEADING_ACCURACY_DEG = 30;
 
 /** Drops the plugin reading's `timestamp` to get the shape the projection expects. */
 function toCameraIntrinsics(reading: CameraIntrinsicsReading): CameraIntrinsics {
@@ -73,44 +57,27 @@ function toCameraIntrinsics(reading: CameraIntrinsicsReading): CameraIntrinsics 
   };
 }
 
-/** Pixel `(width, height)` of `text` in the AR label font, via an offscreen canvas —
- * canvas text measurement is a browser API with no Rust equivalent, which is why this
- * one piece of the layout pipeline stays in TypeScript. */
-function measureText(ctx: CanvasRenderingContext2D | null, text: string): [number, number] {
-  if (!ctx) return [text.length * 8, 18];
-  ctx.font = LABEL_FONT;
-  return [ctx.measureText(text).width, 18];
-}
-
+/** The AR overlay. Everything slow was done before this mounted — see `lib/orientation`,
+ * which holds the position, the visible-peak scene, the terrain horizon and the settled
+ * compass/gyro streams across views. What is left here is the part that genuinely needs
+ * the capture device: the preview, its intrinsics, the skyline fitter's frame stream, and
+ * the projection tick that draws labels. */
 export default function CameraView({ onClose }: { onClose: () => void }) {
-  const [heading, setHeading] = useState<HeadingReading | null>(null);
+  const [heading, setHeading] = useState<HeadingReading | null>(currentHeading);
   const [error, setError] = useState<string | null>(null);
   const [placedLabels, setPlacedLabels] = useState<PlacedLabel[]>([]);
   const [horizonSegments, setHorizonSegments] = useState<[number, number][][]>([]);
-  const [debugLog, setDebugLog] = useState<string[]>([]);
   const [capturing, setCapturing] = useState(false);
   const [captureFlash, setCaptureFlash] = useState(false);
   const [calibration, setCalibration] = useState<CalibrationStatus | null>(null);
+  // Orientation is prepared a view earlier, so its failures (no position fix, no compass)
+  // have to surface here too — otherwise the overlay just silently never appears.
+  const orientation = useSyncExternalStore(subscribeOrientation, orientationSnapshot);
 
-  // Sensor readings arrive far faster than we want to re-layout labels; a periodic
-  // interval reads these refs instead of re-rendering on every single event.
-  const headingRef = useRef<HeadingReading | null>(null);
-  const motionRef = useRef<MotionReading | null>(null);
+  // Intrinsics arrive far faster than we want to re-layout labels, and only the
+  // projection tick reads them; a ref keeps them out of the render path entirely. Heading
+  // and motion live in lib/orientation for the same reason, one level up.
   const intrinsicsRef = useRef<CameraIntrinsics | null>(null);
-  const sceneReadyRef = useRef(false);
-  // Whether the most recent heading reading was rejected for low accuracy, so the log
-  // line below fires once per transition instead of once per reading (headings arrive
-  // many times a second, and a sustained bad fix would otherwise flood the debug HUD's
-  // 12-line buffer and push everything else off screen).
-  const headingRejectedRef = useRef(false);
-  const measureCtxRef = useRef<CanvasRenderingContext2D | null>(null);
-
-  // Visible on-device pipeline trace: TestFlight builds have no attached debugger, so
-  // this is how "why are there no labels" gets diagnosed from a screenshot alone.
-  function log(msg: string) {
-    console.log(msg);
-    setDebugLog((prev) => [...prev.slice(-(DEBUG_LOG_LINES - 1)), msg]);
-  }
 
   async function onCapture() {
     if (capturing) return;
@@ -131,61 +98,26 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
     }
   }
 
-  // Camera preview + compass + device motion lifecycle.
+  // One render per compass reading, which is what the heading readout below wants. The
+  // projection tick reads the same value through `currentHeading()` instead, so it is not
+  // coupled to this.
+  useEffect(() => subscribeHeading(setHeading), []);
+
+  // Camera preview + intrinsics + skyline fitter lifecycle. The compass and gyro are
+  // deliberately *not* here: they were started on the landing page and stay running, so
+  // arriving at this view doesn't pay the magnetometer's settling time again.
   useEffect(() => {
     let cancelled = false;
 
     async function start() {
+      // The scene was built for wherever the phone was when the landing page loaded.
+      // Rebuild it if that has stopped being true; the existing one stays live meanwhile.
+      void refreshOrientation();
+
       try {
         await startCamera();
       } catch (e) {
         if (!cancelled) setError(`[startCamera] ${e instanceof Error ? e.message : String(e)}`);
-      }
-
-      try {
-        await startHeadingUpdates((reading, err) => {
-          if (err) {
-            setError(`[heading] ${err}`);
-            return;
-          }
-          if (!reading) return;
-
-          if (reading.accuracy < 0 || reading.accuracy > MAX_HEADING_ACCURACY_DEG) {
-            if (!headingRejectedRef.current) {
-              headingRejectedRef.current = true;
-              log(`heading: rejected, accuracy ${reading.accuracy.toFixed(0)}°`);
-            }
-            // Leave headingRef/heading exactly as they are. If no good reading has ever
-            // arrived that keeps rendering "Orienting…"; if one already had, freezing on
-            // it beats overwriting with a heading we know is untrustworthy.
-            return;
-          }
-
-          if (headingRejectedRef.current) {
-            headingRejectedRef.current = false;
-            log(`heading: locked, accuracy ${reading.accuracy.toFixed(0)}°`);
-          }
-          headingRef.current = reading;
-          setHeading(reading);
-        });
-      } catch (e) {
-        if (!cancelled) {
-          setError(`[startHeadingUpdates] ${e instanceof Error ? e.message : String(e)}`);
-        }
-      }
-
-      try {
-        await startMotionUpdates((reading, err) => {
-          if (err) {
-            setError(`[motion] ${err}`);
-            return;
-          }
-          if (reading) motionRef.current = reading;
-        });
-      } catch (e) {
-        if (!cancelled) {
-          setError(`[startMotionUpdates] ${e instanceof Error ? e.message : String(e)}`);
-        }
       }
 
       // Must come after startCamera: intrinsics are read off the active capture device.
@@ -219,105 +151,7 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
       cancelled = true;
       commands.stopCalibration().catch(() => {});
       stopIntrinsicsUpdates().catch(() => {});
-      stopMotionUpdates().catch(() => {});
-      stopHeadingUpdates().catch(() => {});
       stopCamera().catch(() => {});
-    };
-  }, []);
-
-  // Observer position + ground elevation, then nearby named peaks filtered down to the
-  // ones actually visible (terrain occlusion via filterVisiblePeaks, which raycasts
-  // against a local DEM downloaded/cached on first use), then hand the scene to Rust
-  // once via setScene.
-  //
-  // This used to run in two passes — a small disc first so something appeared on screen
-  // while the slow 100km Overpass query finished. Peaks now come from a dataset bundled
-  // with the app, so the full radius resolves off a local file and the staged load has
-  // nothing left to hide. No re-fetch-on-movement threshold in this v0 pass.
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadPeaks(observer: Geodetic, radiusM: number) {
-      const peaksResult = await commands.fetchPeaks(observer.lat, observer.lon, radiusM);
-      if (peaksResult.status === "error") throw new Error(peaksResult.error);
-      if (cancelled) return;
-      log(`peaks: ${peaksResult.data.length} named peaks (radius ${radiusM / 1000}km)`);
-
-      const visibleResult = await commands.filterVisiblePeaks(observer, peaksResult.data, radiusM);
-      if (visibleResult.status === "error") throw new Error(visibleResult.error);
-      const peaks = visibleResult.data;
-      if (cancelled) return;
-      log(`peaks: ${peaks.length}/${peaksResult.data.length} visible after occlusion filter`);
-
-      // Text metrics can only come from the browser (canvas measureText has no Rust
-      // equivalent), so peak names are measured once, here, and shipped to Rust with
-      // the scene rather than re-measured on every 100ms tick. Must wait for the real
-      // font to be loaded first — measuring against a fallback font before
-      // -apple-system resolves would cache wrong widths for the session.
-      await document.fonts.ready;
-      if (cancelled) return;
-      if (!measureCtxRef.current) {
-        const canvas = document.createElement("canvas");
-        measureCtxRef.current = canvas.getContext("2d");
-      }
-      const ctx = measureCtxRef.current;
-      const metrics: PeakWithMetrics[] = peaks.map((p) => {
-        const [textW, textH] = measureText(ctx, p.name);
-        return {
-          osmId: p.osmId,
-          name: p.name,
-          geo: { lat: p.lat, lon: p.lon, alt: p.elev },
-          textW,
-          textH,
-        };
-      });
-
-      await commands.setScene(observer, metrics);
-      if (!cancelled) sceneReadyRef.current = true;
-      log(`peaks: scene set (${peaks.length} peaks)`);
-    }
-
-    async function loadHorizon(observer: Geodetic) {
-      const result = await commands.computeHorizon(observer, HORIZON_RANGE_M);
-      if (result.status === "error") throw new Error(result.error);
-      if (cancelled) return;
-      log(`horizon: ${result.data.length} points computed (range ${HORIZON_RANGE_M / 1000}km)`);
-
-      await commands.setHorizon(result.data);
-    }
-
-    async function start() {
-      let step = "getCurrentPosition";
-      try {
-        const pos = await getCurrentPosition();
-        log(`position: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`);
-        step = "fetchGroundElevation";
-        const groundElev = await fetchElevation(pos.coords.latitude, pos.coords.longitude);
-        if (cancelled) return;
-        log(`ground elevation: ${groundElev.toFixed(0)}m`);
-        const observer: Geodetic = {
-          lat: pos.coords.latitude,
-          lon: pos.coords.longitude,
-          alt: groundElev + EYE_HEIGHT_M,
-        };
-
-        step = "loadPeaks";
-        await loadPeaks(observer, PEAK_RADIUS_M);
-
-        step = "loadHorizon";
-        await loadHorizon(observer);
-      } catch (e) {
-        if (!cancelled) {
-          const msg = e instanceof Error ? e.message : String(e);
-          log(`ERROR [${step}]: ${msg}`);
-          setError(`[${step}] ${msg}`);
-        }
-      }
-    }
-
-    start();
-    return () => {
-      cancelled = true;
     };
   }, []);
 
@@ -338,9 +172,10 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
     let loggedFrame = "";
 
     const id = setInterval(() => {
-      if (inFlight || !sceneReadyRef.current) return;
-      const h = headingRef.current;
+      if (inFlight || !isSceneReady()) return;
+      const h = currentHeading();
       if (!h) return;
+      const motion = currentMotion();
 
       const yawDeg = h.trueHeading >= 0 ? h.trueHeading : h.magneticHeading;
       const cam: CameraPose = {
@@ -348,8 +183,8 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
         // gyro datum below is decided in Rust (src-tauri/src/calibration.rs); once the
         // skyline fitter has locked, this stops being consulted.
         yawDeg,
-        pitchDeg: motionRef.current?.pitch ?? 0,
-        rollDeg: motionRef.current?.roll ?? 0,
+        pitchDeg: motion?.pitch ?? 0,
+        rollDeg: motion?.roll ?? 0,
         hfovDeg: FALLBACK_HFOV_DEG,
         width: window.innerWidth,
         height: window.innerHeight,
@@ -364,7 +199,7 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
       // display server to run the real WebView. Wrap this call in performance.now() on
       // a device before trusting that the full round trip is still comfortably fast.
       commands
-        .projectLabels(cam, motionRef.current?.relativeYawDeg ?? null)
+        .projectLabels(cam, motion?.relativeYawDeg ?? null)
         .then(({ labels, horizon, effectiveHfovDeg, calibration }) => {
           setPlacedLabels(labels);
           // Already split into strokeable runs and culled to the viewport by
@@ -418,16 +253,18 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
       : heading.magneticHeading
     : null;
 
+  const banner = error ?? orientation.error;
+
   return (
     <div className="camera-view">
       <div className="camera-overlay">
-        {error && <div className="camera-overlay-error">{error}</div>}
+        {banner && <div className="camera-overlay-error">{banner}</div>}
         {degrees !== null ? (
           <div className="camera-heading">
             {degrees.toFixed(0)}&deg; {cardinal(degrees)}
           </div>
         ) : (
-          !error && <div className="camera-heading">Orienting&hellip;</div>
+          !banner && <div className="camera-heading">Orienting&hellip;</div>
         )}
       </div>
 
@@ -491,7 +328,7 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
         </div>
       )}
 
-      <div className="camera-debug-log">{debugLog.join("\n")}</div>
+      <DebugDrawer />
 
       {/* Peak names and positions come from the bundled OSM extract, which is ODbL — so
           shipping it in the app is redistribution and this notice is a licence
