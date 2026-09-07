@@ -27,6 +27,12 @@ pub struct MotionReading {
     pub pitch: f64,
     /// Rotation about the camera's optical axis, in degrees (0 = top of phone points up).
     pub roll: f64,
+    /// Rotation about the local vertical since the motion stream started, in degrees,
+    /// integrated from the gyro. Increases clockwise, like a compass heading, but has an
+    /// arbitrary origin — only differences between readings mean anything. It is what the
+    /// app uses to *hold* a heading between skyline fits without consulting the
+    /// magnetometer; see `startMotionUpdates` in `CameraPlugin.swift`.
+    pub relative_yaw_deg: f64,
     pub timestamp: u64,
 }
 

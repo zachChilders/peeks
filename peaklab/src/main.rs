@@ -596,8 +596,14 @@ fn main() -> Result<()> {
                             got * 100.0,
                             needed * 100.0
                         ),
-                        peakcore::skyline::Reject::Residual { got, needed } => println!(
-                            "  best alignment still off by {got:.2} px (limit {needed:.2})"
+                        peakcore::skyline::Reject::Residual {
+                            got,
+                            needed,
+                            d_yaw_deg,
+                            d_pitch_deg,
+                        } => println!(
+                            "  best alignment still off by {got:.2} px (limit {needed:.2}), \
+                             at yaw {d_yaw_deg:+.2}° pitch {d_pitch_deg:+.2}°"
                         ),
                         peakcore::skyline::Reject::Ambiguous { got, needed } => println!(
                             "  a distant yaw matched nearly as well: {got:.2}x < {needed:.2}x"

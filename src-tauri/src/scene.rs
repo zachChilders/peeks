@@ -8,6 +8,7 @@
 
 use peakcore::geo::{self, Geodetic};
 use peakcore::projection::{self, layout_labels, CameraPose, Rect};
+use peakcore::visibility;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use specta_typescript::Number;
@@ -52,7 +53,12 @@ pub struct PlacedLabel {
 #[serde(rename_all = "camelCase")]
 pub struct ProjectionResult {
     pub labels: Vec<PlacedLabel>,
-    pub horizon: Vec<(f64, f64)>,
+    /// The debug DEM-horizon skyline as ready-to-stroke polylines: each inner `Vec` is one
+    /// unbroken run of screen points. Broken (rather than one flat list) because the sweep
+    /// has genuine discontinuities — DEM coverage holes, the boundary of what is in front
+    /// of the camera — that only the projection can identify; see
+    /// [`projection::project_horizon`].
+    pub horizon: Vec<Vec<(f64, f64)>>,
     /// Horizontal FOV the projection actually used, after the pose's intrinsics (native
     /// FOV, zoom, aspect-fill crop) were resolved. Returned so the debug HUD can show the
     /// derived number without reimplementing that math in TypeScript.
@@ -75,10 +81,10 @@ const MARGIN: f64 = 60.0;
 const MAX_STACK: usize = 6;
 const LABEL_LINE_GAP: f64 = 4.0;
 
-/// Nominal range for projecting a horizon (azimuth, elevation) angle pair — the vector's
-/// scale doesn't matter for a pinhole projection, only its direction, so this is
-/// arbitrary; see [`geo::enu_from_look_angles`].
-const HORIZON_RANGE_M: f64 = 50_000.0;
+/// Screen-space margin for the debug horizon, in pixels. Wider than [`MARGIN`] so a
+/// polyline still runs past the edge of the frame instead of stopping at it, but far
+/// short of the ±10⁶ px the projection reaches near ±90° from the view direction.
+const HORIZON_MARGIN: f64 = 200.0;
 
 /// Tauri-managed state: the current observer's peaks (precomputed and sorted
 /// nearest-first) and debug DEM-horizon skyline. Both empty until `set_scene`/
@@ -95,7 +101,15 @@ impl Scene {
         let mut entries: Vec<(f64, Entry)> = peaks
             .into_iter()
             .map(|p| {
-                let enu = geo::enu(observer, p.geo);
+                // Apparent direction, not the raw geometric one: `look_angles` folds in
+                // the same atmospheric refraction lift that `visibility`'s occlusion
+                // check and the DEM horizon sweep both apply, so a summit that *is* the
+                // skyline in its direction lands on the drawn horizon line instead of a
+                // whisker below it. Round-tripping through angles here rather than at
+                // projection time keeps it free: this runs once per observer move, while
+                // `project` runs every tick.
+                let (az, el, range) = geo::look_angles(observer, p.geo);
+                let enu = geo::enu_from_look_angles(az, el, range);
                 let dist = geo::great_circle_distance(observer, p.geo);
                 (
                     dist,
@@ -167,16 +181,15 @@ impl Scene {
             })
             .collect();
 
-        let horizon = self
-            .horizon
-            .lock()
-            .unwrap()
-            .iter()
-            .filter_map(|&(az, el)| {
-                let v = geo::enu_from_look_angles(az, el, HORIZON_RANGE_M);
-                projection::project_with_basis(v, basis, focal_px, pose.width, pose.height)
-            })
-            .collect();
+        let horizon = projection::project_horizon(
+            &self.horizon.lock().unwrap(),
+            visibility::HORIZON_AZIMUTH_STEP_DEG,
+            basis,
+            focal_px,
+            pose.width,
+            pose.height,
+            HORIZON_MARGIN,
+        );
 
         ProjectionResult {
             labels,
@@ -197,6 +210,10 @@ pub fn set_scene(observer: Geodetic, peaks: Vec<PeakWithMetrics>, scene: tauri::
 
 /// Sets the debug DEM-horizon skyline as (azimuth_deg, elevation_deg) pairs, from the
 /// `compute_horizon` command. Independent of `set_scene` since it's optional debug data.
+///
+/// The points must come from a sweep at `visibility::HORIZON_AZIMUTH_STEP_DEG`, which is
+/// what `project` assumes when deciding which neighbouring samples are adjacent rather
+/// than separated by a DEM coverage hole.
 #[tauri::command]
 #[specta::specta]
 pub fn set_horizon(points: Vec<(f64, f64)>, scene: tauri::State<Scene>) {
@@ -208,26 +225,23 @@ pub fn horizon_snapshot(scene: &Scene) -> Vec<(f64, f64)> {
     scene.horizon.lock().unwrap().clone()
 }
 
+/// Project the scene for one tick.
+///
+/// `pose.yaw_deg` is the raw compass reading and `relative_yaw_deg` the gyro's integral
+/// about the local vertical (`None` if the motion stream has produced nothing yet).
+/// Which of the two the overlay is actually pointed by is
+/// [`Calibration::resolve_pose`]'s decision, not this function's — see that module for
+/// why the compass is a prior rather than the heading.
 #[tauri::command]
 #[specta::specta]
 pub fn project_labels(
     pose: CameraPose,
+    relative_yaw_deg: Option<f64>,
     scene: tauri::State<Scene>,
     calibration: tauri::State<crate::calibration::Calibration>,
 ) -> ProjectionResult {
-    // Record the pose exactly as the sensors reported it, *before* applying any
-    // correction: the fitter solves for an offset relative to the raw reading, so feeding
-    // it a corrected pose would compound the correction every frame.
-    calibration.record_pose(&pose);
-
-    let (d_yaw, d_pitch) = calibration.offsets();
-    let corrected = CameraPose {
-        yaw_deg: pose.yaw_deg + d_yaw,
-        pitch_deg: pose.pitch_deg + d_pitch,
-        ..pose
-    };
-
-    let mut result = scene.project(&corrected);
+    let resolved = calibration.resolve_pose(&pose, relative_yaw_deg);
+    let mut result = scene.project(&resolved);
     result.calibration = calibration.status();
     result
 }
@@ -262,6 +276,75 @@ mod tests {
         let scene = Scene::default();
         scene.set(observer, peaks);
         scene
+    }
+
+    /// A summit that *is* the skyline in its own direction must land on the drawn horizon
+    /// line, not beside it.
+    ///
+    /// That is the contract the debug overlay is read against ("a peak dot below this line
+    /// is one the occlusion filter should already be dropping"), and it only holds if both
+    /// sides define "elevation angle" identically. They did not: the sweep in
+    /// `peakcore::visibility` returns the *apparent* angle, refraction included — the same
+    /// one `visibility::check` occludes against — while peaks were projected along their
+    /// raw geometric ENU vector.
+    ///
+    /// The gap this closes is small in absolute terms (the lift is ~0.006° at 10 km and
+    /// ~0.06° at the 100 km peak radius, so a fraction of a pixel either way) and was
+    /// never what made the overlay visibly wrong. It is worth closing anyway because it is
+    /// a second definition of the same quantity, which is exactly what this codebase moved
+    /// the geodesy into one crate to avoid. The distances here are deliberately at the far
+    /// end of the peak radius, where the term is large enough to measure.
+    #[test]
+    fn a_summit_that_is_its_own_skyline_lands_on_the_horizon_line() {
+        let observer = Geodetic::new(37.0, -118.0, 2_000.0);
+        let summit = Geodetic::new(37.0 + 90_000.0 / 111_320.0, -118.0, 4_000.0);
+        let (az, el, _) = geo::look_angles(observer, summit);
+
+        let scene = Scene::default();
+        scene.set(
+            observer,
+            vec![PeakWithMetrics {
+                osm_id: 1,
+                name: "Far Summit".into(),
+                geo: summit,
+                text_w: 100.0,
+                text_h: 18.0,
+            }],
+        );
+        // A horizon sitting at exactly the summit's own apparent angle all the way round,
+        // so any offset between dot and line is a disagreement about the angle itself.
+        scene.set_horizon(
+            (0..720)
+                .map(|i| (f64::from(i) * visibility::HORIZON_AZIMUTH_STEP_DEG, el))
+                .collect(),
+        );
+
+        let pose = CameraPose {
+            yaw_deg: az,
+            pitch_deg: 0.0,
+            roll_deg: 0.0,
+            hfov_deg: 63.0,
+            width: 402,
+            height: 874,
+            intrinsics: None,
+        };
+        let result = scene.project(&pose);
+        let anchor = result.labels[0].anchor;
+        let line_y = result
+            .horizon
+            .iter()
+            .flatten()
+            .min_by(|a, b| (a.0 - anchor.0).abs().total_cmp(&(b.0 - anchor.0).abs()))
+            .expect("the horizon covers the view direction")
+            .1;
+
+        // Projecting the raw geometric vector instead puts the dot ~0.3px below the line
+        // at this range, so this tolerance is a real guard rather than a restatement.
+        assert!(
+            (anchor.1 - line_y).abs() < 0.05,
+            "summit dot at y={} but the horizon line is at y={line_y}",
+            anchor.1
+        );
     }
 
     #[test]

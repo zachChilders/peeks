@@ -35,25 +35,6 @@ function cardinal(deg: number): string {
   return CARDINALS[Math.round(deg / 22.5) % 16];
 }
 
-/** Splits the horizon's screen points into separate polyline segments wherever two
- * consecutive points (sorted by azimuth, not screen position) land far apart on screen —
- * e.g. the 358°→0° wraparound, or a gap where a ray had no DEM coverage — so those don't
- * draw as a stray line sweeping across the frame. */
-function splitHorizonSegments(points: [number, number][], maxGapPx: number): [number, number][][] {
-  const segments: [number, number][][] = [];
-  let current: [number, number][] = [];
-  for (const point of points) {
-    const prev = current[current.length - 1];
-    if (prev && Math.hypot(point[0] - prev[0], point[1] - prev[1]) > maxGapPx) {
-      segments.push(current);
-      current = [];
-    }
-    current.push(point);
-  }
-  if (current.length > 0) segments.push(current);
-  return segments;
-}
-
 const EYE_HEIGHT_M = 1.6;
 const PEAK_RADIUS_M = 100_000;
 // How far out the debug DEM-horizon skyline is swept. Deliberately smaller than
@@ -76,6 +57,10 @@ const LABEL_FONT = "15px -apple-system, BlinkMacSystemFont, sans-serif";
 // be off by 90+ degrees in that state. Set a bit above the skyline fitter's own +/-20 deg
 // yaw search range (peakcore::skyline::FitConfig): a heading this func accepts should be
 // close enough that the fitter could still refine it, not so far off that nothing could.
+//
+// That is now the compass's entire job. It has to land the overlay inside the fitter's
+// search window; the fitter supplies the absolute answer and the heading is then held on
+// the gyro datum without consulting this again (see src-tauri/src/calibration.rs).
 const MAX_HEADING_ACCURACY_DEG = 30;
 
 /** Drops the plugin reading's `timestamp` to get the shape the projection expects. */
@@ -101,7 +86,7 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
   const [heading, setHeading] = useState<HeadingReading | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [placedLabels, setPlacedLabels] = useState<PlacedLabel[]>([]);
-  const [horizonPoints, setHorizonPoints] = useState<[number, number][]>([]);
+  const [horizonSegments, setHorizonSegments] = useState<[number, number][][]>([]);
   const [debugLog, setDebugLog] = useState<string[]>([]);
   const [capturing, setCapturing] = useState(false);
   const [captureFlash, setCaptureFlash] = useState(false);
@@ -347,6 +332,10 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
     // first line entirely — the one that matters most.
     let loggedHfov = Number.NEGATIVE_INFINITY;
     let loggedCalibration = "";
+    // The frame geometry the fitter is actually running against, logged once when it
+    // first arrives. Constant for a session, and the one thing a "poor match" line cannot
+    // tell you on its own: see CalibrationStatus::frame_w in calibration.rs.
+    let loggedFrame = "";
 
     const id = setInterval(() => {
       if (inFlight || !sceneReadyRef.current) return;
@@ -355,6 +344,9 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
 
       const yawDeg = h.trueHeading >= 0 ? h.trueHeading : h.magneticHeading;
       const cam: CameraPose = {
+        // The compass reading. Whether the overlay is actually pointed by it or by the
+        // gyro datum below is decided in Rust (src-tauri/src/calibration.rs); once the
+        // skyline fitter has locked, this stops being consulted.
         yawDeg,
         pitchDeg: motionRef.current?.pitch ?? 0,
         rollDeg: motionRef.current?.roll ?? 0,
@@ -372,10 +364,14 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
       // display server to run the real WebView. Wrap this call in performance.now() on
       // a device before trusting that the full round trip is still comfortably fast.
       commands
-        .projectLabels(cam)
+        .projectLabels(cam, motionRef.current?.relativeYawDeg ?? null)
         .then(({ labels, horizon, effectiveHfovDeg, calibration }) => {
           setPlacedLabels(labels);
-          setHorizonPoints(horizon.map(([x, y]) => [x ?? 0, y ?? 0]));
+          // Already split into strokeable runs and culled to the viewport by
+          // `peakcore::projection::project_horizon` — see that function for why deciding
+          // where the line breaks needs the camera geometry rather than a screen-distance
+          // heuristic. Nothing left to do here but read the numbers.
+          setHorizonSegments(horizon.map((seg) => seg.map(([x, y]) => [x!, y!])));
 
           // Logged from here rather than the intrinsics callback so the derived FOV comes
           // straight from the projection that used it — no reimplementing the aspect-fill
@@ -394,6 +390,13 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
           // the only visibility into whether it is working. `detail` says which gate
           // rejected a frame rather than just going quiet.
           setCalibration(calibration);
+          if (calibration.frameW > 0) {
+            const frame = `${calibration.frameW}x${calibration.frameH} f=${calibration.frameFocalPx!.toFixed(0)}px`;
+            if (frame !== loggedFrame) {
+              loggedFrame = frame;
+              log(`fit: frame ${frame}`);
+            }
+          }
           if (calibration.detail !== loggedCalibration) {
             loggedCalibration = calibration.detail;
             log(`fit: ${calibration.detail}`);
@@ -414,8 +417,6 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
       ? heading.trueHeading
       : heading.magneticHeading
     : null;
-
-  const horizonSegments = splitHorizonSegments(horizonPoints, Math.max(window.innerWidth, window.innerHeight));
 
   return (
     <div className="camera-view">
@@ -472,14 +473,20 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
         ))}
       </div>
 
-      {/* Whether the skyline fitter has a lock, and what it is applying. The overlay
-          silently shifting is otherwise indistinguishable from a compass that drifted. */}
+      {/* Once locked, the heading is held on the gyro datum and the compass is out of the
+          loop, so this line is the only place the compass error is visible at all — and
+          the age is how long the datum has been coasting on gyro drift since anything last
+          corrected it. Without both, an overlay silently sliding is indistinguishable from
+          one that is simply right. */}
       {calibration?.locked && (
         <div className="camera-calibration">
-          fit {calibration.dYawDeg!.toFixed(1)}&deg; / {calibration.dPitchDeg!.toFixed(1)}&deg;
+          compass {calibration.dYawDeg! >= 0 ? "+" : ""}
+          {calibration.dYawDeg!.toFixed(1)}&deg; / pitch {calibration.dPitchDeg! >= 0 ? "+" : ""}
+          {calibration.dPitchDeg!.toFixed(1)}&deg;
           <span className="camera-calibration-rate">
             {" "}
             {calibration.accepted}/{calibration.frames}
+            {calibration.lockAgeS !== null && ` · ${calibration.lockAgeS!.toFixed(0)}s ago`}
           </span>
         </div>
       )}

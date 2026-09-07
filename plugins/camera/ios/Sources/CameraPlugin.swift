@@ -41,6 +41,12 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
 
   private let motionManager = CMMotionManager()
   private var motionChannel: Channel?
+  /// Running integral of rotation about the local vertical, in degrees, and the
+  /// `CMDeviceMotion.timestamp` of the sample it was last advanced to. See
+  /// `startMotionUpdates` for what this is and why it is integrated here rather than read
+  /// off `CMAttitude`.
+  private var relativeYawDeg: Double = 0
+  private var lastMotionAt: TimeInterval?
 
   private var intrinsicsChannel: Channel?
   private var zoomObservation: NSKeyValueObservation?
@@ -405,7 +411,8 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
   }
 
   //
-  // Device motion (pitch/roll, for a phone held upright as an AR viewfinder)
+  // Device motion (pitch/roll and relative heading, for a phone held upright as an AR
+  // viewfinder)
   //
 
   @objc public func startMotionUpdates(_ invoke: Invoke) throws {
@@ -416,9 +423,16 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
 
     let args = try invoke.parseArgs(StartMotionArgs.self)
     self.motionChannel = args.channel
+    self.relativeYawDeg = 0
+    self.lastMotionAt = nil
 
     motionManager.deviceMotionUpdateInterval = 1.0 / 30.0
-    motionManager.startDeviceMotionUpdates(to: .main) { motion, error in
+    // `.xArbitraryZVertical` explicitly rather than by default: Z is the true vertical
+    // (gravity-referenced, so it does not drift), and the heading origin is arbitrary and
+    // magnetometer-free. That is exactly the frame `relativeYawDeg` below wants — the app
+    // gets its absolute heading from the skyline fit, and asking CoreMotion for a
+    // magnetically-corrected frame would feed the compass back in through the side door.
+    motionManager.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: .main) { motion, error in
       if let error = error {
         do {
           try self.motionChannel?.send(error.localizedDescription)
@@ -441,9 +455,45 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
       let pitch = atan2(g.z, -g.y) * 180.0 / .pi
       let roll = atan2(g.x, -g.y) * 180.0 / .pi
 
+      // Rotation about the local vertical, integrated. This is the *change* in compass
+      // heading with no notion of where north is: an arbitrary but stable datum the app
+      // pins to true north once, using the skyline fit, instead of re-reading a
+      // magnetometer that is routinely several degrees off near a car or a magnetic case.
+      //
+      // Integrated from `rotationRate` rather than read off `CMAttitude` deliberately.
+      // Both `rotationRate` and `gravity` are documented as vectors in the *device* frame,
+      // so this needs no assumption about which direction `CMAttitude.rotationMatrix`
+      // maps — a convention that is easy to get backwards and impossible to check without
+      // hardware. It also sidesteps the Euler-angle degeneracy that already forced pitch
+      // and roll above to come from gravity: held upright, a phone sits at the gimbal lock
+      // of `attitude.yaw`. `rotationRate` is the bias-corrected rate (unlike
+      // `CMGyro.rotationRate`), so the dominant drift term is already removed by
+      // CoreMotion; what is left accumulates slowly and is what re-fitting corrects.
+      //
+      // `motion.timestamp` is the sample's own clock, so a dropped or late callback
+      // integrates the interval it actually covers rather than a nominal 1/30s.
+      let gLen = (g.x * g.x + g.y * g.y + g.z * g.z).squareRoot()
+      if let last = self.lastMotionAt, gLen > 0 {
+        let dt = motion.timestamp - last
+        // A gap this long means the stream stalled (backgrounded, say); integrating
+        // across it would invent rotation that may never have happened, so the datum
+        // simply holds and the next fit corrects whatever was missed.
+        if dt > 0, dt < 1.0 {
+          // Up in device coordinates is -gravity, whatever way the phone is being held.
+          let up = (x: -g.x / gLen, y: -g.y / gLen, z: -g.z / gLen)
+          let r = motion.rotationRate
+          // Right-hand rule about up is counter-clockwise seen from above; compass
+          // azimuth runs the other way, hence the subtraction.
+          let rateAboutUp = r.x * up.x + r.y * up.y + r.z * up.z
+          self.relativeYawDeg -= rateAboutUp * dt * 180.0 / .pi
+        }
+      }
+      self.lastMotionAt = motion.timestamp
+
       let reading: JsonObject = [
         "pitch": pitch,
         "roll": roll,
+        "relativeYawDeg": self.relativeYawDeg,
         "timestamp": Int(Date().timeIntervalSince1970 * 1000),
       ]
       self.motionChannel?.send(reading)
@@ -455,6 +505,7 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
   @objc public func stopMotionUpdates(_ invoke: Invoke) throws {
     motionManager.stopDeviceMotionUpdates()
     self.motionChannel = nil
+    self.lastMotionAt = nil
     invoke.resolve()
   }
 

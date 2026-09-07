@@ -21,11 +21,6 @@ use peakcore::visibility;
 
 use crate::dem::Dem;
 
-/// Matches the app's own sweep (`src-tauri/src/peaks.rs`), so a desktop fit sees the same
-/// horizon the device would.
-const HORIZON_AZIMUTH_STEP_DEG: f64 = 2.0;
-const HORIZON_RAY_STEP_M: f64 = 60.0;
-
 const DETECTED_COLOR: Rgba<u8> = Rgba([80, 220, 255, 255]);
 const PREDICTED_COLOR: Rgba<u8> = Rgba([255, 90, 90, 255]);
 
@@ -84,12 +79,16 @@ pub fn run(
 
     dem.load_region(observer.lat, observer.lon, range_m)
         .context("loading DEM for the horizon sweep")?;
+    // The sweep parameters come from peakcore so a desktop fit sees exactly the horizon
+    // the device does. `DetectConfig`/`FitConfig` are tuned here and then shipped
+    // verbatim, and `max_rms_px` in particular only means the same thing on both sides if
+    // the horizon underneath it is sampled the same way.
     let horizon = visibility::sweep_horizon(
         dem.core(),
         observer,
         range_m,
-        HORIZON_AZIMUTH_STEP_DEG,
-        HORIZON_RAY_STEP_M,
+        visibility::HORIZON_AZIMUTH_STEP_DEG,
+        visibility::HORIZON_RAY_STEP_M,
     );
 
     // The photo is the whole sensor frame, so its long axis carries the native FOV. Build

@@ -61,12 +61,20 @@ export type MotionReading = {
    * Rotation about the camera's optical axis, in degrees (0 = top of phone points up).
    */
   roll: number
+  /**
+   * Rotation about the local vertical since the stream started, in degrees, integrated
+   * from the gyro. Increases clockwise like a compass heading but has an arbitrary
+   * origin, so only differences between readings mean anything. Used to hold a heading
+   * between skyline fits without consulting the magnetometer.
+   */
+  relativeYawDeg: number
   timestamp: number
 }
 
 /**
- * Start streaming device-motion (pitch/roll) updates, derived from the gravity vector
- * for a phone held upright as a camera viewfinder.
+ * Start streaming device-motion (pitch/roll and relative heading) updates. Pitch and roll
+ * come from the gravity vector, for a phone held upright as a camera viewfinder;
+ * relative heading is integrated from the gyro about the local vertical.
  */
 export async function startMotionUpdates(
   cb: (reading: MotionReading | null, error?: string) => void

@@ -246,7 +246,19 @@ pub enum Reject {
     /// Not enough detected columns overlapped the projected horizon.
     Coverage { got: f64, needed: f64 },
     /// Best alignment still did not match well.
-    Residual { got: f64, needed: f64 },
+    ///
+    /// Carries the offsets the search settled on, because the residual alone cannot
+    /// distinguish the two failures that matter: a fitter that found the right ridge and
+    /// missed the gate by a little (small offsets, residual just over `needed`) from one
+    /// that is aligning against something else entirely (offsets pinned near the edge of
+    /// the search range, residual several times over). Both read as "poor match" without
+    /// them, and on a TestFlight build the HUD line is the only evidence there is.
+    Residual {
+        got: f64,
+        needed: f64,
+        d_yaw_deg: f64,
+        d_pitch_deg: f64,
+    },
     /// A distant yaw offset matched nearly as well — repetitive terrain.
     Ambiguous { got: f64, needed: f64 },
     /// Nothing to fit: empty horizon or no detected columns.
@@ -435,6 +447,8 @@ pub fn fit(
         return Err(Reject::Residual {
             got: rms_px,
             needed: cfg.max_rms_px,
+            d_yaw_deg,
+            d_pitch_deg,
         });
     }
     if uniqueness < cfg.min_uniqueness {
