@@ -1,0 +1,47 @@
+/* Bottom-right in whichever view hosts it: clear of the camera's centered capture button
+   and its bottom-left attribution, and clear of the landing page's centered column. */
+.debug-drawer {
+  position: absolute;
+  right: 12px;
+  bottom: max(6px, env(safe-area-inset-bottom));
+  z-index: 1002;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  max-width: calc(100vw - 24px);
+}
+
+.debug-drawer-toggle {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: rgba(255, 255, 255, 0.75);
+  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 5px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.debug-drawer-count {
+  color: #7cffb2;
+  opacity: 0.8;
+}
+
+.debug-drawer-body {
+  width: min(440px, calc(100vw - 24px));
+  max-height: 42vh;
+  margin: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  background: rgba(0, 0, 0, 0.78);
+  color: #7cffb2;
+  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+  line-height: 1.45;
+  padding: 8px 10px;
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

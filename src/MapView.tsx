@@ -32,7 +32,13 @@ function metersToFeet(m: number): number {
   return m * 3.28084;
 }
 
-export default function MapView({ onOpenCamera }: { onOpenCamera: () => void }) {
+export default function MapView({
+  onBack,
+  onOpenCamera,
+}: {
+  onBack: () => void;
+  onOpenCamera: () => void;
+}) {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const markerRef = useRef<L.Marker | null>(null);
@@ -208,6 +214,23 @@ export default function MapView({ onOpenCamera }: { onOpenCamera: () => void }) 
         )}
         {!position && !error && <div>Locating…</div>}
       </div>
+      <button
+        type="button"
+        className="map-back-button"
+        onClick={onBack}
+        aria-label="Back to start"
+      >
+        <svg viewBox="0 0 24 24" width="22" height="22">
+          <path
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M15 5l-7 7 7 7"
+          />
+        </svg>
+      </button>
       <button
         type="button"
         className="locate-button"
