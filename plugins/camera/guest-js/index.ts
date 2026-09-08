@@ -141,11 +141,26 @@ export async function stopIntrinsicsUpdates(): Promise<void> {
   await invoke('plugin:camera|stop_intrinsics_updates')
 }
 
+export type PhotoCapture = {
+  /**
+   * The name the photo carries in the Photos library. iOS gives an app no file path for
+   * a photo it added to the library, so this is a name the plugin assigns at save time
+   * rather than one it reads back.
+   */
+  fileName: string
+  /**
+   * The Photos library's own handle for the created asset, which is what can fetch the
+   * photo again later. Null if Photos did not hand one back; the capture still
+   * succeeded.
+   */
+  localIdentifier: string | null
+}
+
 /**
  * Snapshot the camera preview plus the AR overlay on top of it (labels, leader lines,
  * anything else rendered in HTML), and save the result to the Photos library. Prompts
  * for add-only Photos access on first use. iOS only.
  */
-export async function capturePhoto(): Promise<void> {
-  await invoke('plugin:camera|capture_photo')
+export async function capturePhoto(): Promise<PhotoCapture> {
+  return await invoke('plugin:camera|capture_photo')
 }

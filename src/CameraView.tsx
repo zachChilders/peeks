@@ -16,6 +16,7 @@ import {
   type PlacedLabel,
 } from "./bindings";
 import {
+  currentFix,
   currentHeading,
   currentMotion,
   isSceneReady,
@@ -83,12 +84,44 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
     if (capturing) return;
     setCapturing(true);
     try {
-      await capturePhoto();
-      log("capture: saved to Photos");
+      // Started before the shutter and awaited after it, for two reasons: the position
+      // recorded is then contemporaneous with the capture rather than however long
+      // writing the asset took, and a slow fix cannot hold up the shutter flash below.
+      // `currentFix` resolves to null rather than throwing, so nothing is left unhandled
+      // if the capture itself fails first.
+      const fixInFlight = currentFix();
+
+      const photo = await capturePhoto();
+      log(`capture: saved to Photos as ${photo.fileName}`);
       // Brief shutter flash — the only feedback a capture happened, since there's no
       // shutter sound/animation from the native side.
       setCaptureFlash(true);
       setTimeout(() => setCaptureFlash(false), 150);
+
+      const fix = await fixInFlight;
+
+      if (!fix) {
+        // The photo is saved either way; only the coordinates are lost, and the log is
+        // where that has to be visible, since nothing on screen would show it.
+        log(`ERROR [logPhoto]: no position for ${photo.fileName}, not recorded`);
+        setError("[logPhoto] no position available; photo saved without coordinates");
+        return;
+      }
+
+      const logged = await commands.logPhoto({
+        fileName: photo.fileName,
+        localIdentifier: photo.localIdentifier,
+        lat: fix.lat,
+        lon: fix.lon,
+        altitudeM: fix.altitudeM,
+        accuracyM: fix.accuracyM,
+      });
+      if (logged.status === "error") {
+        log(`ERROR [logPhoto]: ${logged.error}`);
+        setError(`[logPhoto] ${logged.error}`);
+        return;
+      }
+      log(`capture: recorded at ${fix.lat.toFixed(5)}, ${fix.lon.toFixed(5)}`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       log(`ERROR [capturePhoto]: ${msg}`);

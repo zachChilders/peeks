@@ -23,6 +23,19 @@ class StartFramesArgs: Decodable {
   let channel: Channel
 }
 
+/// What `capturePhoto` resolves with.
+///
+/// iOS hands an app no file path for a photo it added to the Photos library, so the
+/// "file name" here is one the plugin *assigns* at save time rather than one it reads
+/// back — see `capturePhoto`. `localIdentifier` is the library's own handle for the
+/// created asset and is the only value here that can fetch the photo again; it is
+/// optional because it comes from a placeholder that Photos is not obliged to hand back,
+/// and `JSONEncoder` simply omits the key when it is nil.
+struct CaptureResult: Encodable {
+  let fileName: String
+  let localIdentifier: String?
+}
+
 class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDelegate,
   AVCaptureVideoDataOutputSampleBufferDelegate
 {
@@ -35,6 +48,19 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
   private weak var pinchGesture: UIPinchGestureRecognizer?
   private var pinchStartZoomFactor: CGFloat?
   private var pendingCaptureInvoke: Invoke?
+
+  /// Builds the name each capture is filed under in the Photos library. Pinned to the
+  /// POSIX locale and UTC on purpose: a device set to a non-Gregorian calendar or to
+  /// non-Arabic numerals would otherwise render this template into something that is
+  /// neither sortable nor recognisable as a date, and the app's own log of these names
+  /// would inherit that.
+  private static let captureNameFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    formatter.dateFormat = "yyyyMMdd-HHmmssSSS"
+    return formatter
+  }()
 
   private let locationManager = CLLocationManager()
   private var headingChannel: Channel?
@@ -354,19 +380,34 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
         return
       }
 
+      // Named here rather than left to Photos, which would otherwise file the asset
+      // under a generic name of its own. The app records this name against the
+      // capture's coordinates, and a name it chose is the only handle it can be sure
+      // matches — there is no path to read back for a library asset.
+      let fileName = "Peeks-\(CameraPlugin.captureNameFormatter.string(from: Date())).jpg"
+
       PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
         guard status == .authorized || status == .limited else {
           invoke.reject("Photo library access denied.")
           return
         }
 
+        // Written inside the change block and read in the completion handler below.
+        // Photos runs the two in order on its own queue, and the placeholder's
+        // identifier is the created asset's, so it is valid as soon as the change
+        // commits.
+        var localIdentifier: String?
+
         PHPhotoLibrary.shared().performChanges({
           let request = PHAssetCreationRequest.forAsset()
-          request.addResource(with: .photo, data: jpegData, options: nil)
+          let options = PHAssetResourceCreationOptions()
+          options.originalFilename = fileName
+          request.addResource(with: .photo, data: jpegData, options: options)
+          localIdentifier = request.placeholderForCreatedAsset?.localIdentifier
         }) { success, error in
           DispatchQueue.main.async {
             if success {
-              invoke.resolve()
+              invoke.resolve(CaptureResult(fileName: fileName, localIdentifier: localIdentifier))
             } else {
               invoke.reject(error?.localizedDescription ?? "Failed to save photo.")
             }

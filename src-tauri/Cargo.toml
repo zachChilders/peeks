@@ -43,9 +43,15 @@ tokio = { version = "1", features = ["fs", "rt"] }
 specta = { version = "=2.0.0-rc.25", features = ["derive"] }
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 specta-typescript = "0.0.12"
+# The photo capture log (photolog.rs). `bundled` compiles SQLite from source rather than
+# linking the system library: iOS ships its own libsqlite3, but bundling is the only thing
+# that builds identically for the iOS targets and for the Linux host CI compiles for.
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
+# photolog.rs's tests open real database files; this is where they put them.
+tempfile = "3.27.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [[bin]]

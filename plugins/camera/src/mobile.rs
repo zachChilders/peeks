@@ -201,7 +201,10 @@ impl<R: Runtime> Camera<R> {
 
     /// Snapshots the camera preview plus the AR overlay on top of it, and saves the
     /// result to the Photos library (prompting for add-only access on first use).
-    pub fn capture_photo(&self) -> crate::Result<()> {
+    ///
+    /// Returns the name the photo was filed under, which the plugin assigns itself —
+    /// see [`PhotoCapture::file_name`].
+    pub fn capture_photo(&self) -> crate::Result<PhotoCapture> {
         self.0
             .run_mobile_plugin("capturePhoto", ())
             .map_err(Into::into)

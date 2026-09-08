@@ -12,6 +12,7 @@ mod calibration;
 mod dem;
 mod peaks;
 mod peakstore;
+mod photolog;
 mod scene;
 
 /// The single source of truth for which commands exist and what they look like.
@@ -29,6 +30,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
         scene::project_labels,
         calibration::start_calibration,
         calibration::stop_calibration,
+        photolog::log_photo,
     ])
 }
 
@@ -58,6 +60,7 @@ pub fn run() {
         .manage(dem::DemCache::default())
         .manage(peakstore::PeakStore::default())
         .manage(calibration::Calibration::default())
+        .manage(photolog::PhotoLog::default())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);
