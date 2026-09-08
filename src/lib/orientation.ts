@@ -154,15 +154,20 @@ function measureText(ctx: CanvasRenderingContext2D | null, text: string): [numbe
 let measureCtx: CanvasRenderingContext2D | null = null;
 
 /** Great-circle distance in metres. Only used against `OBSERVER_STALE_M`, so the
- * spherical approximation is far more precision than the decision needs. */
+ * spherical approximation is far more precision than the decision needs.
+ *
+ * The `!`s are the same opt-out the AR overlay makes: generated bindings type every f64
+ * field `number | null` because serde_json encodes NaN/Infinity as null, which a
+ * coordinate never is in practice. */
 function distanceM(a: Geodetic, b: Geodetic): number {
   const R = 6_371_000;
   const toRad = Math.PI / 180;
-  const dLat = (b.lat - a.lat) * toRad;
-  const dLon = (b.lon - a.lon) * toRad;
+  const aLat = a.lat! * toRad;
+  const bLat = b.lat! * toRad;
+  const dLat = bLat - aLat;
+  const dLon = (b.lon! - a.lon!) * toRad;
   const s =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(a.lat * toRad) * Math.cos(b.lat * toRad) * Math.sin(dLon / 2) ** 2;
+    Math.sin(dLat / 2) ** 2 + Math.cos(aLat) * Math.cos(bLat) * Math.sin(dLon / 2) ** 2;
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
 }
 
