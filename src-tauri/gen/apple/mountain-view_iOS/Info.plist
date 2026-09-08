@@ -12,24 +12,26 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Peeks</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>0.1.0</string>
 	<key>CFBundleVersion</key>
-	<string>0.1.0.21</string>
+	<string>0.1.0.23</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Mountain View uses the camera to show a live AR overlay of surrounding peaks over the real-world view.</string>
+	<string>Peeks uses the camera to show a live AR overlay of surrounding peaks over the real-world view.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Mountain View uses your location to identify and position nearby peaks in the AR overlay.</string>
+	<string>Peeks uses your location to identify and position nearby peaks in the AR overlay.</string>
 	<key>NSMotionUsageDescription</key>
-	<string>Mountain View uses motion and barometer data to track device orientation and elevation for the AR overlay.</string>
+	<string>Peeks uses motion and barometer data to track device orientation and elevation for the AR overlay.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Mountain View saves the photos you capture in the AR view to your Photos library.</string>
+	<string>Peeks saves the photos you capture in the AR view to your Photos library.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIRequiredDeviceCapabilities</key>

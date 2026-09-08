@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "mountain-view",
+        "title": "Peeks",
         "width": 800,
         "height": 600
       }
