@@ -351,6 +351,50 @@ async function buildScene(): Promise<void> {
   }
 }
 
+/** A position fix taken at a moment, as opposed to the observer a scene was built for.
+ * Coordinates and their accuracies exactly as GPS reported them — nothing here is
+ * derived from the DEM. */
+export type PositionFix = {
+  lat: number;
+  lon: number;
+  /** GPS altitude, metres. Null when the fix carried none. */
+  altitudeM: number | null;
+  /** Horizontal accuracy radius, metres. */
+  accuracyM: number | null;
+};
+
+/** The best fix available right now, for tagging something that happens at an instant —
+ * a photo capture, rather than a scene built for a place.
+ *
+ * Asks the GPS directly instead of reusing `state.observer`: the observer is where the
+ * *scene* was built, which is deliberately allowed to be up to `OBSERVER_STALE_M` behind
+ * where the phone actually is. That tolerance is right for deciding which peaks are
+ * visible and wrong for recording where a photo was taken.
+ *
+ * Falls back to the observer anyway if the fix fails, since a position from a few hundred
+ * metres away still beats none — but without its altitude, which is a DEM surface sample
+ * plus an assumed eye height rather than anything GPS measured. Null only if there is no
+ * position of any kind to be had. */
+export async function currentFix(): Promise<PositionFix | null> {
+  try {
+    const pos = await getCurrentPosition();
+    return {
+      lat: pos.coords.latitude,
+      lon: pos.coords.longitude,
+      altitudeM: pos.coords.altitude,
+      accuracyM: pos.coords.accuracy,
+    };
+  } catch (e) {
+    const observer = state.observer;
+    if (!observer) {
+      log(`fix: no position (${message(e)}) and no scene observer to fall back to`);
+      return null;
+    }
+    log(`fix: position failed (${message(e)}), falling back to the scene observer`);
+    return { lat: observer.lat!, lon: observer.lon!, altitudeM: null, accuracyM: null };
+  }
+}
+
 /** Start orienting: sensors first (they settle on their own schedule, so the earlier the
  * better), then the scene. Idempotent — every view that depends on orientation calls it,
  * and only the first call does anything. */

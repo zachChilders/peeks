@@ -25,6 +25,40 @@ The on-device pipeline trace (`src/lib/debugLog.ts`) is shared by every view and
 drawer that is collapsed by default — most of its lines are now written before the camera
 view exists.
 
+## The capture log
+
+Every photo taken from the camera view is recorded in a SQLite database — one row per
+capture, holding the name the photo was filed under in the Photos library and the GPS
+position it was taken from (plus the altitude and horizontal accuracy the fix carried, and
+the Photos asset identifier that can fetch the picture itself back).
+
+The database is `photos.sqlite3` under the app data directory, which resolves on iOS to
+`<container>/Library/Application Support/com.mountainview.app/`. That location is the
+point: **iCloud Backup takes everything in the app container except `Library/Caches` and
+`tmp`**, so the log rides along in the device backup and survives a restore onto a new
+phone. Note the contrast with the DEM tile cache (`src-tauri/src/dem.rs`), which is
+deliberately under `app_cache_dir()` — `Library/Caches` — because it is re-downloadable and
+has no business inflating a backup. The capture log is not: once the shutter has fired, the
+position that photo was taken from exists nowhere else.
+
+Two things about the filename are worth knowing. iOS hands an app no file path for a photo
+it saved to the Photos library, so the plugin *assigns* the name at save time
+(`Peeks-<UTC yyyyMMdd-HHmmssSSS>.jpg`, via the asset resource's `originalFilename`) rather
+than reading one back — see `capturePhoto` in `plugins/camera/ios/Sources/CameraPlugin.swift`.
+And the coordinates come from a fix taken at the shutter, not from the AR scene's observer:
+the scene is allowed to lag the phone by up to `OBSERVER_STALE_M` (`src/lib/orientation.ts`),
+which is the right tolerance for deciding which peaks are visible and the wrong one for
+saying where a picture was taken.
+
+Reading the log back is not wired up to any UI — the rows exist to be recovered from a
+backup. Timestamps are epoch milliseconds, so `datetime(captured_at_ms / 1000, 'unixepoch')`
+is what renders them:
+
+```sh
+sqlite3 photos.sqlite3 \
+  "SELECT datetime(captured_at_ms / 1000, 'unixepoch'), file_name, lat, lon FROM photos;"
+```
+
 ## The bundled peak dataset
 
 `src-tauri/resources/peaks.mvpk` holds named `natural=peak` nodes from OpenStreetMap,

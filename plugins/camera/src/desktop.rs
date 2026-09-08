@@ -82,7 +82,7 @@ impl<R: Runtime> Camera<R> {
         Ok(())
     }
 
-    pub fn capture_photo(&self) -> crate::Result<()> {
+    pub fn capture_photo(&self) -> crate::Result<PhotoCapture> {
         Err(crate::Error::Unsupported)
     }
 }

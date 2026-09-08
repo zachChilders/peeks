@@ -1,5 +1,6 @@
 use tauri::{command, ipc::Channel, AppHandle, Runtime};
 
+use crate::models::PhotoCapture;
 use crate::CameraExt;
 use crate::Result;
 
@@ -66,6 +67,6 @@ pub(crate) async fn stop_frame_updates<R: Runtime>(app: AppHandle<R>) -> Result<
 }
 
 #[command]
-pub(crate) async fn capture_photo<R: Runtime>(app: AppHandle<R>) -> Result<()> {
+pub(crate) async fn capture_photo<R: Runtime>(app: AppHandle<R>) -> Result<PhotoCapture> {
     app.camera().capture_photo()
 }

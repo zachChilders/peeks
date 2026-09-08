@@ -86,3 +86,21 @@ pub enum FrameEvent {
     Reading(FrameReading),
     Error(String),
 }
+
+/// What one [`capture_photo`](crate::mobile::Camera::capture_photo) produced, so the
+/// caller can tie the saved photo to whatever else it knows about the moment it was
+/// taken.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhotoCapture {
+    /// The name the photo carries in the Photos library. iOS gives an app no file path
+    /// for a photo it added to the library, so this is a name the plugin assigns at save
+    /// time (as the asset resource's `originalFilename`) rather than one it reads back —
+    /// see `capturePhoto` in `CameraPlugin.swift`.
+    pub file_name: String,
+    /// The Photos library's own handle for the created asset (`PHObject.localIdentifier`),
+    /// which is what can fetch the photo again later. `None` if Photos did not hand a
+    /// placeholder back; the capture itself still succeeded.
+    #[serde(default)]
+    pub local_identifier: Option<String>,
+}
