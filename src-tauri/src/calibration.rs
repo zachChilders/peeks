@@ -88,9 +88,12 @@ pub struct CalibrationStatus {
     /// Size of the last camera frame fitted, and the focal length used for it, in frame
     /// pixels. Reported because everything the fitter concludes rests on these three
     /// numbers being right, and nothing else on screen would reveal it if they were not:
-    /// a capture buffer arriving in the sensor's native landscape rather than portrait,
-    /// or intrinsics describing a different format than the one delivered, both show up
-    /// only as a residual that never converges. Zero until a frame has been fitted.
+    /// a frame arriving in the orientation the phone is *not* being held in, or intrinsics
+    /// describing a different format than the one delivered, both show up only as a
+    /// residual that never converges. The frame turns with the phone (see
+    /// `applyCaptureOrientation` in `CameraPlugin.swift`), so which of `frame_w` and
+    /// `frame_h` is the larger is itself the check that it did. Zero until a frame has
+    /// been fitted.
     pub frame_w: u32,
     pub frame_h: u32,
     pub frame_focal_px: f64,

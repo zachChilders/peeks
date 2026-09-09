@@ -25,7 +25,12 @@ pub enum HeadingEvent {
 pub struct MotionReading {
     /// Camera tilt above horizontal, in degrees (0 = level, +90 = pointing at zenith).
     pub pitch: f64,
-    /// Rotation about the camera's optical axis, in degrees (0 = top of phone points up).
+    /// Rotation of the rendered image about the camera's optical axis, in degrees, and
+    /// not of the phone: the interface's own rotation is already taken out, so this is ~0
+    /// whenever the phone is held square, in landscape as well as portrait, and non-zero
+    /// only for a genuine tilt. That is the quantity the AR overlay projects with, since
+    /// the overlay is laid out in the interface's frame and drawn over a preview the
+    /// capture connection has rotated to match it.
     pub roll: f64,
     /// Rotation about the local vertical since the motion stream started, in degrees,
     /// integrated from the gyro. Increases clockwise, like a compass heading, but has an
@@ -49,7 +54,8 @@ pub enum MotionEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CameraIntrinsicsReading {
-    /// Field of view across the capture buffer's long axis, in degrees, at zoom 1.0.
+    /// Field of view across the capture buffer's long axis, in degrees, at zoom 1.0. That
+    /// axis maps to the screen's long axis — height in portrait, width in landscape.
     pub fov_deg: f64,
     /// Current zoom, relative to the widest lens. 1.0 = unzoomed.
     pub zoom_factor: f64,

@@ -39,10 +39,12 @@ function cardinal(deg: number): string {
 }
 
 // Fallback on-screen horizontal FOV, used only for the few ticks before the first
-// intrinsics reading arrives from the camera plugin. It is a poor stand-in — the real
-// value on a portrait phone is closer to 35 deg once the resizeAspectFill crop is
-// accounted for (see CameraIntrinsics in peakcore's projection.rs) — so anything that
-// depends on accurate placement should wait for real intrinsics rather than trust this.
+// intrinsics reading arrives from the camera plugin. It is a poor stand-in in either
+// orientation — the real value is nearer 35 deg held portrait, once the resizeAspectFill
+// crop is accounted for, and nearer the sensor's full 68 deg held landscape, where the
+// crop moves to the vertical axis (see CameraIntrinsics in peakcore's projection.rs) — so
+// anything that depends on accurate placement should wait for real intrinsics rather than
+// trust this.
 // The fitter enforces exactly that: `ingest_frame` refuses to fit without real
 // intrinsics, so no ticks projected with this value can reach the calibration datum.
 const FALLBACK_HFOV_DEG = 63;
@@ -219,6 +221,10 @@ export default function CameraView({ onClose }: { onClose: () => void }) {
         pitchDeg: motion?.pitch ?? 0,
         rollDeg: motion?.roll ?? 0,
         hfovDeg: FALLBACK_HFOV_DEG,
+        // Read fresh every tick rather than captured once, which is the whole of this
+        // view's rotation handling: the two swap when the phone turns, and the projection
+        // reads the aspect-fill crop off them (see CameraIntrinsics::focal_px). The native
+        // side turns the preview, the fitter's frames and the compass datum to match.
         width: window.innerWidth,
         height: window.innerHeight,
         // Takes precedence over hfovDeg above; non-null from the first reading onward.

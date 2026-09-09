@@ -36,6 +36,15 @@ struct CaptureResult: Encodable {
   let localIdentifier: String?
 }
 
+/// Fold an angle into (-180, 180]. Roll is reported as a signed tilt, so subtracting the
+/// interface's rotation from it has to come back on that scale rather than at 270 degrees.
+private func wrap180(_ deg: Double) -> Double {
+  let wrapped = deg.truncatingRemainder(dividingBy: 360)
+  if wrapped > 180 { return wrapped - 360 }
+  if wrapped <= -180 { return wrapped + 360 }
+  return wrapped
+}
+
 class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDelegate,
   AVCaptureVideoDataOutputSampleBufferDelegate
 {
@@ -48,6 +57,12 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
   private weak var pinchGesture: UIPinchGestureRecognizer?
   private var pinchStartZoomFactor: CGFloat?
   private var pendingCaptureInvoke: Invoke?
+
+  /// How far the rendered image is rotated, clockwise in degrees, from the device's own
+  /// portrait frame. Subtracted from the gravity-derived roll in `startMotionUpdates` so
+  /// what the AR overlay is told is the tilt of the *picture* rather than of the phone —
+  /// in landscape those differ by exactly 90 degrees. Written and read on the main queue.
+  private var rollOffsetDeg: Double = 0
 
   /// Builds the name each capture is filed under in the Photos library. Pinned to the
   /// POSIX locale and UTC on purpose: a device set to a non-Gregorian calendar or to
@@ -92,12 +107,112 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
 
   @objc open override func load(webview: WKWebView) {
     self.webview = webview
+    // Explicit rather than relying on whatever else in the process happens to have asked
+    // for them: without a generator running, `orientationDidChangeNotification` never
+    // fires and the whole capture chain silently stays pinned to portrait. UIKit-only, so
+    // it goes to the main queue rather than assuming this hook runs there.
+    DispatchQueue.main.async {
+      UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+    }
     NotificationCenter.default.addObserver(
       self,
-      selector: #selector(updatePreviewFrame),
+      selector: #selector(handleOrientationChange),
       name: UIDevice.orientationDidChangeNotification,
       object: nil
     )
+  }
+
+  //
+  // Orientation
+  //
+  // Five things have to agree about which way is up: the preview layer, the frames handed
+  // to the skyline fitter, the still photo, the compass datum, and the roll angle the AR
+  // overlay projects with. They are set from one place for that reason. A preview rotated
+  // into landscape while frames still arrive portrait is not a cosmetic mismatch — the
+  // skyline detector scans columns, so a frame rotated 90 degrees puts the horizon
+  // running *down* it and there is nothing left for the fit to lock onto.
+
+  /// The interface's current orientation, which is the one the UI (and therefore the
+  /// overlay's coordinate system) is laid out in. Portrait when there is no window to
+  /// ask, which is also the right answer before the view is attached.
+  private func currentInterfaceOrientation() -> UIInterfaceOrientation {
+    webview?.window?.windowScene?.interfaceOrientation ?? .portrait
+  }
+
+  /// `AVCaptureVideoOrientation` shares raw values with `UIInterfaceOrientation`
+  /// (portrait 1, upside-down 2, landscapeRight 3, landscapeLeft 4), so this pairing
+  /// needs no swap. Note that the same mapping from `UIDeviceOrientation` *is* inverted —
+  /// its landscape cases are named for where the home button went, not for where the
+  /// interface ended up — which is the usual way this gets written backwards.
+  private static func videoOrientation(for ui: UIInterfaceOrientation)
+    -> AVCaptureVideoOrientation
+  {
+    AVCaptureVideoOrientation(rawValue: ui.rawValue) ?? .portrait
+  }
+
+  /// Core Location wants a *device* orientation, so this is where the swap above has to
+  /// be paid. It matters more than it looks: `trueHeading` is the app's prior for the
+  /// skyline fit, whose yaw search only spans +/-20 degrees, so a heading left referenced
+  /// to portrait while the phone is in landscape is 90 degrees out and the fitter can
+  /// never lock at all.
+  private static func headingOrientation(for ui: UIInterfaceOrientation) -> CLDeviceOrientation {
+    switch ui {
+    case .landscapeLeft: return .landscapeRight
+    case .landscapeRight: return .landscapeLeft
+    case .portraitUpsideDown: return .portraitUpsideDown
+    default: return .portrait
+    }
+  }
+
+  /// Degrees the interface has been rotated clockwise from portrait, which is also how
+  /// far the capture connections above rotate the image. `UIInterfaceOrientation`
+  /// `.landscapeLeft` is the device held with its *top* to the right (it pairs with
+  /// `UIDeviceOrientation.landscapeRight`), and the gravity-derived roll reads +90 there.
+  private static func rollOffsetDeg(for ui: UIInterfaceOrientation) -> Double {
+    switch ui {
+    case .landscapeLeft: return 90
+    case .landscapeRight: return -90
+    case .portraitUpsideDown: return 180
+    default: return 0
+    }
+  }
+
+  /// Point everything orientation-dependent at the interface's current orientation.
+  /// Idempotent, and safe to call before the camera exists — the connections it cannot
+  /// find yet are set by `startCamera`, which calls this once the preview layer is in
+  /// place.
+  ///
+  /// Still on `videoOrientation`, deprecated in iOS 17 in favour of `videoRotationAngle`,
+  /// because the replacement's angle convention is not something this can be checked
+  /// against without a device — and a rotation applied the wrong way round is worse than
+  /// a deprecation warning. Both connections this file already had were set the same way.
+  private func applyCaptureOrientation() {
+    let ui = currentInterfaceOrientation()
+    let video = Self.videoOrientation(for: ui)
+
+    rollOffsetDeg = Self.rollOffsetDeg(for: ui)
+    locationManager.headingOrientation = Self.headingOrientation(for: ui)
+
+    for connection in [
+      previewLayer?.connection,
+      videoOutput.connection(with: .video),
+      photoOutput.connection(with: .video),
+    ] {
+      guard let connection = connection, connection.isVideoOrientationSupported else { continue }
+      connection.videoOrientation = video
+    }
+  }
+
+  @objc private func handleOrientationChange() {
+    // Deferred: the notification is posted off the *device* orientation, which moves
+    // before the interface finishes rotating, so reading the window scene or the
+    // container's bounds synchronously here can still return the outgoing layout.
+    DispatchQueue.main.async {
+      if let container = self.webview?.superview {
+        self.previewLayer?.frame = container.bounds
+      }
+      self.applyCaptureOrientation()
+    }
   }
 
   //
@@ -146,14 +261,6 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
             self.captureSession.addOutput(self.videoOutput)
           }
           self.captureSession.commitConfiguration()
-
-          // Portrait so the skyline runs horizontally in the delivered buffer — the
-          // detector scans columns. Matches what capturePhoto already does.
-          if let connection = self.videoOutput.connection(with: .video),
-            connection.isVideoOrientationSupported
-          {
-            connection.videoOrientation = .portrait
-          }
         }
 
         // Make the webview transparent so the native camera preview shows through from behind.
@@ -171,6 +278,11 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
         layer.frame = container.bounds
         container.layer.insertSublayer(layer, below: webview.layer)
         self.previewLayer = layer
+
+        // Now that the preview layer exists there is a full set of connections to point
+        // at the current orientation — including the frame output, which has to deliver a
+        // gravity-upright buffer for the skyline detector's column scan to mean anything.
+        self.applyCaptureOrientation()
 
         if self.pinchGesture == nil {
           let pinch = UIPinchGestureRecognizer(target: self, action: #selector(self.handlePinch(_:)))
@@ -227,13 +339,6 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
     webview?.scrollView.pinchGestureRecognizer?.isEnabled = true
 
     isCameraRunning = false
-  }
-
-  @objc private func updatePreviewFrame() {
-    guard let container = webview?.superview else { return }
-    DispatchQueue.main.async {
-      self.previewLayer?.frame = container.bounds
-    }
   }
 
   /// Prefers a virtual multi-lens device (wide + ultrawide/tele) so `videoZoomFactor`
@@ -312,11 +417,11 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
       return
     }
 
-    if let connection = photoOutput.connection(with: .video), connection.isVideoOrientationSupported {
-      // The app's AR viewfinder is used held upright; matches the assumption already
-      // made for pitch/roll in startMotionUpdates.
-      connection.videoOrientation = .portrait
-    }
+    // The overlay is composited onto this photo at the container's own bounds, so the
+    // photo has to come back in the same orientation the container is laid out in —
+    // otherwise a landscape capture arrives portrait and aspect-fill crops most of it
+    // away to cover the frame.
+    applyCaptureOrientation()
 
     pendingCaptureInvoke = invoke
     photoOutput.capturePhoto(with: AVCapturePhotoSettings(), delegate: self)
@@ -430,6 +535,11 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
     let args = try invoke.parseArgs(StartHeadingArgs.self)
     self.headingChannel = args.channel
 
+    // Both sensor streams start on the landing page, before there is a camera, so both
+    // seed the orientation rather than leaving it to `startCamera`: an app *opened* in
+    // landscape would otherwise report a heading referenced to portrait, and a roll
+    // referenced to the phone, until it was next rotated.
+    applyCaptureOrientation()
     locationManager.startUpdatingHeading()
     invoke.resolve()
   }
@@ -467,6 +577,12 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
     self.relativeYawDeg = 0
     self.lastMotionAt = nil
 
+    // See `startHeadingUpdates`: the roll reported below is referenced to the interface,
+    // so `rollOffsetDeg` has to be right before the first sample arrives. Not merely a
+    // duplicate of the call there — heading rejects outright on a device with no
+    // magnetometer, and this stream still runs.
+    applyCaptureOrientation()
+
     motionManager.deviceMotionUpdateInterval = 1.0 / 30.0
     // `.xArbitraryZVertical` explicitly rather than by default: Z is the true vertical
     // (gravity-referenced, so it does not drift), and the heading origin is arbitrary and
@@ -489,12 +605,26 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
       // (rotation about the fixed local X/Y axes), not for a phone held upright as a
       // camera viewfinder. Here the camera's optical axis is the device's local -Z, so:
       //   pitch = angle of the camera axis above horizontal (0 = level, +90 = zenith)
-      //   roll  = rotation about the camera axis (0 = top of phone points up)
+      //   roll  = rotation of the rendered image about that axis (0 = image upright)
       // Unverified on real hardware — Simulator has no motion sensors to check against.
       // If pitch or roll reads inverted on a real device, flip the corresponding sign.
       let g = motion.gravity
-      let pitch = atan2(g.z, -g.y) * 180.0 / .pi
-      let roll = atan2(g.x, -g.y) * 180.0 / .pi
+      let gLen = (g.x * g.x + g.y * g.y + g.z * g.z).squareRoot()
+
+      // The elevation of the optical axis is the gravity component along it and nothing
+      // else, which is why this is an `asin` and not an `atan2` against some second axis.
+      // It was `atan2(g.z, -g.y)` — correct only while -Y was still the up direction,
+      // i.e. in portrait. Turn the phone to landscape and -g.y goes to ~0 alongside g.z,
+      // leaving atan2(noise, noise): pitch swung to +/-90 with the camera aimed level at
+      // a ridge, which is what made the overlay unusable there.
+      let pitch = gLen > 0 ? asin(max(-1.0, min(1.0, g.z / gLen))) * 180.0 / .pi : 0
+
+      // The phone's own roll, minus however far the interface has turned to stay upright.
+      // The overlay is drawn in the interface's coordinate system and projected against
+      // an image the capture connections have rotated to match it, so what both want is
+      // the residual tilt of the picture: ~0 in portrait and in landscape alike, and only
+      // non-zero when the phone is genuinely held off-square.
+      let roll = wrap180(atan2(g.x, -g.y) * 180.0 / .pi - self.rollOffsetDeg)
 
       // Rotation about the local vertical, integrated. This is the *change* in compass
       // heading with no notion of where north is: an arbitrary but stable datum the app
@@ -513,7 +643,6 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
       //
       // `motion.timestamp` is the sample's own clock, so a dropped or late callback
       // integrates the interval it actually covers rather than a nominal 1/30s.
-      let gLen = (g.x * g.x + g.y * g.y + g.z * g.z).squareRoot()
       if let last = self.lastMotionAt, gLen > 0 {
         let dt = motion.timestamp - last
         // A gap this long means the stream stalled (backgrounded, say); integrating
@@ -590,10 +719,15 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
   // Frames (for skyline fitting)
   //
 
-  /// Target width of the downsampled frame. Small enough to be cheap to ship and process,
-  /// large enough that quantising the skyline to whole rows stays under about a quarter of
-  /// a degree — see `peakcore::skyline::fit`, whose accuracy is floored by exactly this.
-  private static let frameWidth = 160
+  /// Target size of the downsampled frame's *short* axis. Small enough to be cheap to
+  /// ship and process, large enough that quantising the skyline to whole rows stays under
+  /// about a quarter of a degree — see `peakcore::skyline::fit`, whose accuracy is floored
+  /// by exactly this.
+  ///
+  /// The short axis rather than the width, because the frame is landscape once the phone
+  /// is: fixing the width would shrink a landscape frame to 160 px across the *long* axis
+  /// and cost most of that angular resolution just for turning the phone.
+  private static let frameShortPx = 160
   /// Fitting wants a recent frame, not a fast one. Everything else is dropped.
   private static let frameInterval: CFTimeInterval = 0.5
 
@@ -637,8 +771,9 @@ class CameraPlugin: Plugin, CLLocationManagerDelegate, AVCapturePhotoCaptureDele
     let stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0)
     guard srcW > 0, srcH > 0 else { return }
 
-    let dstW = min(Self.frameWidth, srcW)
-    let dstH = max(1, Int((Double(dstW) * Double(srcH) / Double(srcW)).rounded()))
+    let scale = Double(Self.frameShortPx) / Double(min(srcW, srcH))
+    let dstW = max(1, min(srcW, Int((Double(srcW) * scale).rounded())))
+    let dstH = max(1, min(srcH, Int((Double(srcH) * scale).rounded())))
 
     // Box-average, matching `peakcore::skyline::downsample_gray`. Point-sampling would
     // alias thin bright features (a lit cloud edge, a snow patch) into the brightness

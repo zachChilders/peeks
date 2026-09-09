@@ -58,7 +58,10 @@ export type MotionReading = {
    */
   pitch: number
   /**
-   * Rotation about the camera's optical axis, in degrees (0 = top of phone points up).
+   * Rotation of the rendered image about the camera's optical axis, in degrees — not of
+   * the phone. The interface's own rotation is already taken out, so this is ~0 whenever
+   * the phone is held square, in landscape as well as portrait, and non-zero only for a
+   * genuine tilt.
    */
   roll: number
   /**
@@ -73,8 +76,8 @@ export type MotionReading = {
 
 /**
  * Start streaming device-motion (pitch/roll and relative heading) updates. Pitch and roll
- * come from the gravity vector, for a phone held upright as a camera viewfinder;
- * relative heading is integrated from the gyro about the local vertical.
+ * come from the gravity vector and hold in any orientation; relative heading is
+ * integrated from the gyro about the local vertical.
  */
 export async function startMotionUpdates(
   cb: (reading: MotionReading | null, error?: string) => void
@@ -98,7 +101,7 @@ export async function stopMotionUpdates(): Promise<void> {
 export type CameraIntrinsicsReading = {
   /**
    * Field of view across the capture buffer's long axis, in degrees, at zoom 1.0.
-   * Held portrait, that axis maps to screen height — not width.
+   * That axis maps to the screen's long axis — height in portrait, width in landscape.
    */
   fovDeg: number
   /**

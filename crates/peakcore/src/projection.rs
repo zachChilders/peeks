@@ -4,25 +4,29 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 
 /// Real capture intrinsics, as reported by the device, for a preview rendered with
-/// `resizeAspectFill` into a portrait container.
+/// `resizeAspectFill` into the app's container.
 ///
 /// Deriving the focal length from a single assumed on-screen horizontal FOV (what
 /// [`CameraPose::hfov_deg`] does) is wrong on a phone for three compounding reasons, so
 /// this carries the raw quantities and does the conversion in one place instead:
 ///
-/// 1. `fov_deg` is measured across the capture buffer's *long* axis. Held portrait, that
-///    axis maps to screen **height**, not width.
+/// 1. `fov_deg` is measured across the capture buffer's *long* axis, which maps to the
+///    screen's long axis — height in portrait, width in landscape.
 /// 2. `resizeAspectFill` scales the buffer to *cover* the container and crops the
-///    overflow, so the horizontal FOV that survives on screen is much narrower than
-///    `fov_deg`.
+///    overflow, so one of the two on-screen FOVs is always narrower than `fov_deg`.
 /// 3. Zoom crops further still, tightening the FOV by `zoom_factor`.
 ///
 /// For a 1920x1080 buffer at `fov_deg` 68 on a 393x852 portrait screen, the three
 /// together put the real on-screen horizontal FOV near 35 deg — about half the 63 deg
-/// that was assumed before this existed.
+/// that was assumed before this existed. Turn the same phone to landscape and the crop
+/// moves to the other axis: the horizontal FOV becomes the full 68 deg and the vertical
+/// one is what narrows.
 ///
-/// Portrait-only: the preview layer's connection orientation isn't managed either (see
-/// `updatePreviewFrame` in the camera plugin), so landscape is out of scope for both.
+/// Orientation-independent, and only because the capture chain is. The plugin rotates
+/// the preview layer, the fitter's frames and the still photo with the interface (see
+/// `applyCaptureOrientation` in `CameraPlugin.swift`), so the buffer's long axis is
+/// always the screen's long axis and there is one aspect-fill rule rather than one per
+/// orientation.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct CameraIntrinsics {
@@ -43,11 +47,14 @@ impl CameraIntrinsics {
         // Focal length in buffer pixels, then tightened by the zoom crop.
         let f_buf =
             (self.buffer_long_px / 2.0) / (self.fov_deg.to_radians() / 2.0).tan() * self.zoom_factor;
-        // Held portrait, the buffer presents rotated: its short axis spans screen width
-        // and its long axis spans screen height. `max` is what makes this aspect *fill*
-        // (cover and crop) rather than fit.
-        let cover = (screen_w as f64 / self.buffer_short_px)
-            .max(screen_h as f64 / self.buffer_long_px);
+        // The buffer presents with its long axis along the screen's long axis, whichever
+        // that currently is: portrait puts it on height, landscape on width. Pairing the
+        // axes by length rather than by name is what makes this hold in both, and it is
+        // only true because the capture connection is rotated with the interface. `max`
+        // is what makes this aspect *fill* (cover and crop) rather than fit.
+        let screen_long = f64::from(screen_w.max(screen_h));
+        let screen_short = f64::from(screen_w.min(screen_h));
+        let cover = (screen_long / self.buffer_long_px).max(screen_short / self.buffer_short_px);
         f_buf * cover
     }
 
@@ -450,6 +457,47 @@ mod tests {
             (cam.effective_hfov_deg() - 34.6).abs() < 0.5,
             "hfov should be cropped to ~34.6 deg, got {}",
             cam.effective_hfov_deg()
+        );
+    }
+
+    /// The same phone turned on its side. Nothing about the capture changes — the buffer
+    /// is still 1920x1080 at 68 deg — but the aspect-fill crop moves to the other axis,
+    /// so the FOVs swap rather than staying where portrait left them.
+    fn iphone_pose_landscape(zoom: f64) -> CameraPose {
+        CameraPose {
+            width: 852,
+            height: 393,
+            ..iphone_pose(zoom)
+        }
+    }
+
+    #[test]
+    fn landscape_puts_the_native_fov_on_the_horizontal_axis() {
+        let cam = iphone_pose_landscape(1.0);
+        assert!(
+            (cam.effective_hfov_deg() - 68.0).abs() < 0.5,
+            "hfov should be the native long-axis FOV in landscape, got {}",
+            cam.effective_hfov_deg()
+        );
+        assert!(
+            (cam.vfov_deg() - 34.6).abs() < 0.5,
+            "vfov should be the cropped axis in landscape, got {}",
+            cam.vfov_deg()
+        );
+    }
+
+    /// Rotating the phone must not change the focal length: the same lens is imaging the
+    /// same buffer onto the same number of screen pixels per degree, only about a
+    /// different axis. Reading the portrait rule in landscape scaled it by ~0.79 instead
+    /// of ~0.44 — a 78% overestimate, which lands as peaks sliding off the edge of the
+    /// frame the moment the phone is turned.
+    #[test]
+    fn focal_length_is_the_same_in_both_orientations() {
+        let portrait = iphone_pose(1.0).focal_px();
+        let landscape = iphone_pose_landscape(1.0).focal_px();
+        assert!(
+            (portrait - landscape).abs() < 1e-9,
+            "focal length changed with orientation: {portrait} vs {landscape}"
         );
     }
 
