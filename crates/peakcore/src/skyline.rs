@@ -169,7 +169,7 @@ pub fn detect(gray: &[u8], width: usize, height: usize, cfg: &DetectConfig) -> S
     let mut i = best
         .iter()
         .enumerate()
-        .max_by(|a, b| a.1.partial_cmp(b.1).expect("scores are finite"))
+        .max_by(|a, b| a.1.total_cmp(b.1))
         .map(|(i, _)| i)
         .unwrap_or(0);
     let mut path = vec![0usize; width];
@@ -293,10 +293,18 @@ fn predict(
         if let Some(xy) =
             projection::project_with_basis(v, basis, focal_px, pose.width, pose.height)
         {
-            scratch.push(xy);
+            // A ray almost perpendicular to the view axis divides by a near-zero `z` and
+            // comes back at 1e300 or beyond, which the interpolation in `residual` then
+            // turns into a NaN residual. Dropping those here is the same guard
+            // [`crate::projection::project_horizon`] already applies for the same reason,
+            // and it is not hypothetical: a camera pointed near the zenith makes the
+            // *whole* horizon ring near-perpendicular at once.
+            if xy.0.is_finite() && xy.1.is_finite() {
+                scratch.push(xy);
+            }
         }
     }
-    scratch.sort_by(|a, b| a.0.partial_cmp(&b.0).expect("projected coords are finite"));
+    scratch.sort_by(|a, b| a.0.total_cmp(&b.0));
 }
 
 /// Trimmed RMS residual between the detected skyline and a predicted one, plus the number
@@ -322,7 +330,14 @@ fn residual(skyline: &Skyline, predicted: &[(f64, f64)], buf: &mut Vec<f64>) -> 
         } else {
             (xf - x0) / (x1 - x0)
         };
-        buf.push((y0 + t * (y1 - y0) - f64::from(*y)).abs());
+        let r = (y0 + t * (y1 - y0) - f64::from(*y)).abs();
+        // Finite inputs can still interpolate to a non-finite residual when the two
+        // bracketing points are far enough apart to overflow the subtraction. A column
+        // that produced one has nothing to say about the fit; keeping it would poison
+        // the whole sum.
+        if r.is_finite() {
+            buf.push(r);
+        }
     }
 
     if buf.is_empty() {
@@ -333,7 +348,7 @@ fn residual(skyline: &Skyline, predicted: &[(f64, f64)], buf: &mut Vec<f64>) -> 
     // Trim the worst fifth before scoring. Clouds, a foreground tree, and the frame edge
     // all produce a handful of large residuals that would otherwise dominate the sum and
     // drag the whole fit toward them.
-    buf.sort_by(|a, b| a.partial_cmp(b).expect("residuals are finite"));
+    buf.sort_by(|a, b| a.total_cmp(b));
     let keep = (buf.len() * 4 / 5).max(1);
     let sum_sq: f64 = buf[..keep].iter().map(|r| r * r).sum();
     Some(((sum_sq / keep as f64).sqrt(), contributing))
@@ -400,12 +415,14 @@ pub fn fit(
 
     // Uniqueness, measured on the coarse surface: how much worse is the best alignment
     // that is *not* a small perturbation of the chosen one?
-    let best_rms = evaluated
+    let Some(best_rms) = evaluated
         .iter()
         .filter(|(dy, dp, _)| (*dy - cy).abs() < 1e-9 && (*dp - cp).abs() < 1e-9)
         .map(|(_, _, r)| *r)
         .next()
-        .expect("the winner was evaluated");
+    else {
+        return Err(Reject::NoData);
+    };
     let rival = evaluated
         .iter()
         .filter(|(dy, _, _)| (dy - cy).abs() >= cfg.uniqueness_separation_deg)
@@ -434,7 +451,13 @@ pub fn fit(
             }
         }
     }
-    let (d_yaw_deg, d_pitch_deg, rms_px, contributing) = refined.expect("coarse winner re-evaluates");
+    // The coarse winner is re-evaluated at the centre of this pass, so this normally
+    // holds — but "normally" is not worth a panic on the frame-ingest thread, where an
+    // unwind crosses back into the plugin's Objective-C callback and takes the process
+    // down rather than losing one frame.
+    let Some((d_yaw_deg, d_pitch_deg, rms_px, contributing)) = refined else {
+        return Err(Reject::NoData);
+    };
 
     let coverage = contributing as f64 / skyline.width as f64;
     if coverage < cfg.min_coverage {
@@ -673,5 +696,87 @@ mod tests {
             Err(Reject::Ambiguous { .. }) => {}
             other => panic!("expected Ambiguous for a periodic ridge, got {other:?}"),
         }
+    }
+
+    /// A pose aimed near the zenith puts the entire horizon ring nearly perpendicular to
+    /// the view axis at once, so every sample divides by a near-zero depth and projects
+    /// past 1e300. `fit` has to come back with a rejection: it runs on the plugin's frame
+    /// callback thread, where a panic unwinds into Objective-C and takes the process down
+    /// instead of costing one frame.
+    ///
+    /// Reachable in ordinary use, not just in principle. Pitch is read off the gravity
+    /// vector, and until `CameraPlugin.swift` computed it as an `asin`, turning the phone
+    /// to landscape left it as `atan2` of two components that are both ~0 there — so
+    /// pitch flipped to near +/-90 on its own, with the phone aimed level at a ridge.
+    #[test]
+    fn a_pose_aimed_at_the_sky_is_rejected_rather_than_panicked_on() {
+        let horizon = varied_horizon();
+        let observed = skyline_from(&horizon, &frame_pose(90.0, 0.0), frame_pose(90.0, 0.0).focal_px());
+
+        for pitch in [-179.0, -90.5, -90.0, -89.5, 0.0, 89.5, 90.0, 90.5, 179.0] {
+            let believed = frame_pose(90.0, pitch);
+            let outcome = fit(
+                &observed,
+                &horizon,
+                &believed,
+                believed.focal_px(),
+                &FitConfig::default(),
+            );
+            if pitch.abs() > 45.0 {
+                assert!(
+                    outcome.is_err(),
+                    "pitch {pitch} should not produce a usable fit, got {outcome:?}"
+                );
+            }
+        }
+    }
+
+    /// The frame the fitter is handed is landscape once the phone is, because the capture
+    /// connection turns with the interface. Nothing in the fit assumes otherwise — the
+    /// skyline still runs across the frame's columns — so the same synthetic ridge has to
+    /// round-trip through a wide frame as well as a tall one.
+    #[test]
+    fn recovers_an_offset_from_a_landscape_frame() {
+        const LW: usize = 284;
+        const LH: usize = 160;
+
+        let landscape_pose = |yaw: f64, pitch: f64| CameraPose {
+            width: LW as u32,
+            height: LH as u32,
+            ..frame_pose(yaw, pitch)
+        };
+
+        let horizon = varied_horizon();
+        let truth = landscape_pose(90.0, 0.0);
+        let focal = truth.focal_px();
+
+        // `skyline_from` is pinned to the portrait W/H, so build the wide one here.
+        let mut scratch = Vec::new();
+        predict(&horizon, &truth, focal, 0.0, 0.0, &mut scratch);
+        let mut rows = vec![None; LW];
+        for (x, row) in rows.iter_mut().enumerate() {
+            let xf = x as f64;
+            if scratch.len() < 2 || xf < scratch[0].0 || xf > scratch[scratch.len() - 1].0 {
+                continue;
+            }
+            let i = scratch.partition_point(|p| p.0 < xf).max(1);
+            let (x0, y0) = scratch[i - 1];
+            let (x1, y1) = scratch[i];
+            let y = y0 + (xf - x0) / (x1 - x0) * (y1 - y0);
+            if (0.0..LH as f64).contains(&y) {
+                *row = Some(y.round() as u32);
+            }
+        }
+        let observed = Skyline {
+            rows,
+            width: LW,
+            height: LH,
+        };
+
+        let believed = landscape_pose(90.0 - 3.0, 0.0 - 1.0);
+        let fit = fit(&observed, &horizon, &believed, focal, &FitConfig::default())
+            .expect("a landscape frame should fit as well as a portrait one");
+        assert!((fit.d_yaw_deg - 3.0).abs() < 0.15, "yaw: got {}", fit.d_yaw_deg);
+        assert!((fit.d_pitch_deg - 1.0).abs() < 0.15, "pitch: got {}", fit.d_pitch_deg);
     }
 }
